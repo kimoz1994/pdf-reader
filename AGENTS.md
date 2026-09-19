@@ -26,3 +26,4 @@ python main.py
 
 ## Skills
 - Project-local skills live in `.opencode/skills/` (one subfolder per skill, each with a `SKILL.md`). They are committed with the repo (not gitignored). A restart of the opencode session is required to pick up new/edited skills.
+- All skills (including the Matt Pocock workflow skills) are project-scoped only — none are installed globally.
