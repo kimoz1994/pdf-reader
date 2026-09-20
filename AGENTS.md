@@ -3,13 +3,21 @@
 GUI-only PyQt6 PDF reader (console version was removed). Educational/experimental project.
 
 ## Run the app
-Run from the `gui_app/` directory (imports are flat, not `gui_app.`-prefixed):
+Use the helper scripts from the repo root (they pick the `pdf-reader-clean` env python and `gui_app/` working dir automatically):
+
+```powershell
+.\run.ps1   # run once
+.\dev.ps1   # watch gui_app/**/*.py and auto-restart on save
+```
+
+Manual equivalent (imports are flat, not `gui_app.`-prefixed, so run from `gui_app/`):
 
 ```powershell
 cd pdf_reader/gui_app
 python main.py
 ```
 
+- Environment python: `D:\volume\tempprograms\anaconda\envs\pdf-reader-clean\python.exe` (conda env `pdf-reader-clean`).
 - Dependencies: `PyQt6` + `pymupdf`, declared in `requirements.txt` (repo root). A fresh environment will fail to import until deps are installed (e.g. `pip install -r requirements.txt`).
 - Image/PDF lib is imported as `pymupdf` in the GUI code, not `fitz` (though `services/*` loader/detector still use `fitz`).
 
