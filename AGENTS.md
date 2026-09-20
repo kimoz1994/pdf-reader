@@ -35,3 +35,9 @@ python main.py
 ## Skills
 - Project-local skills live in `.opencode/skills/` (one subfolder per skill, each with a `SKILL.md`). This folder is gitignored (personal, not app files). A restart of the opencode session is required to pick up new/edited skills.
 - All skills (including the Matt Pocock workflow skills) are project-scoped only — none are installed globally.
+
+## Workflow (user expectation)
+- **Commit and push after every change** — the user does not want to be reminded. Feature work goes on feature branches → PR → review → merge to `master`. Doc-only changes may go straight to `master`.
+- Repo `origin` is `https://github.com/kimoz1994/pdf-reader.git`. Current branch: `master` (no remote branch protection yet).
+- **Live documents to keep updated**: `README.md` (repo root, follows the aishippingblog 16-section guide; not all sections apply — mark gaps honestly), `pdf_reader/README.md` (short pointer to root README), and `CONTEXT.md` (domain glossary — updated during design/grilling, not a spec).
+- Planned work stream: extract workflow — PR ① capture flow (`e`/`Esc`/`d`-twice) + blue re-draw + Extracts hierarchy + delete; PR ② editing + jump-back.

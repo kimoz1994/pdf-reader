@@ -1,3 +1,5 @@
-# PDF Reader Learning Notes
+# PDF Reader
 
-This folder contains a simple PDF reading project structure for learning and experimentation.
+A desktop PDF reader for studying: read documents in a keyboard-driven reader, extract highlights into notes, and review them later.
+
+Built as an educational/experimental project with PyQt6 and PyMuPDF. See the [repo README](../README.md) for setup, architecture, and roadmap.
