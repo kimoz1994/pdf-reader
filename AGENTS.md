@@ -59,7 +59,7 @@ Default five canonical role labels used as-is. See `docs/agents/triage-labels.md
 Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
 ## Workflow (user expectation)
-- **Commit and push after every change** — the user does not want to be reminded. Feature work goes on feature branches → PR → review → merge to `master`. Doc-only changes may go straight to `master`.
+- **Commit and push after every change** — the user does not want to be reminded. Feature work goes on feature branches → PR → review → merge to `master`. Doc-only changes go straight to `master`, and `AGENTS.md` itself is edited directly on `master` (self-referential doc).
 - Repo `origin` is `https://github.com/kimoz1994/pdf-reader.git`. Current branch: `master` (no remote branch protection yet).
 - **Live documents to keep updated**: `README.md` (repo root, follows the aishippingblog 16-section guide; not all sections apply — mark gaps honestly), `pdf_reader/README.md` (short pointer to root README), and `CONTEXT.md` (domain glossary — updated during design/grilling, not a spec).
 - Planned work stream: extract workflow — PR ① capture flow (`e`/`Esc`/`d`-twice) + blue re-draw + Extracts hierarchy + delete; PR ② editing + jump-back.
