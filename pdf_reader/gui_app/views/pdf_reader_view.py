@@ -366,6 +366,9 @@ class PDFReaderView(QWidget):
 
         self.pdf_view.installEventFilter(self)
         self.pdf_view.viewport().installEventFilter(self)
+        # Text-selection cursor over the pages, matching the drag-to-select
+        # behaviour wired up in eventFilter.
+        self.pdf_view.viewport().setCursor(Qt.CursorShape.IBeamCursor)
 
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
@@ -374,7 +377,7 @@ class PDFReaderView(QWidget):
             self._refresh_highlights()
 
         if obj is self.pdf_view.viewport():
-            offset = self.pdf_view.viewport().pos()
+            offset = QPointF(self.pdf_view.viewport().pos())
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.MouseButton.LeftButton:
                     self.drag_start = event.position() + offset
