@@ -25,5 +25,5 @@ python main.py
 - `gui_app/views/pdf_reader_view.py:26-28` inserts the repo root into `sys.path` — cargo-culted; not actively required by anything.
 
 ## Skills
-- Project-local skills live in `.opencode/skills/` (one subfolder per skill, each with a `SKILL.md`). They are committed with the repo (not gitignored). A restart of the opencode session is required to pick up new/edited skills.
+- Project-local skills live in `.opencode/skills/` (one subfolder per skill, each with a `SKILL.md`). This folder is gitignored (personal, not app files). A restart of the opencode session is required to pick up new/edited skills.
 - All skills (including the Matt Pocock workflow skills) are project-scoped only — none are installed globally.
