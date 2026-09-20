@@ -10,6 +10,8 @@ from PyQt6.QtGui import QFont
 
 from views.library_view import LibraryView
 from views.pdf_reader_view import PDFReaderView
+from views.extracts_view import ExtractsView
+from services.extract_store import init_schema
 
 
 class MainWindow(QMainWindow):
@@ -42,14 +44,16 @@ class MainWindow(QMainWindow):
         self.content_layout.addWidget(self.stacked_widget)
         
         self.main_layout.addWidget(self.content_widget, 1)
-        
+
         # Create views
         self.library_view = LibraryView()
         self.pdf_view = PDFReaderView()
-        
+        self.extracts_view = ExtractsView()
+
         # Add to stack
         self.stacked_widget.addWidget(self.library_view)
         self.stacked_widget.addWidget(self.pdf_view)
+        self.stacked_widget.addWidget(self.extracts_view)
         
         # Track current PDF
         self.current_pdf_path = None
@@ -138,7 +142,7 @@ class MainWindow(QMainWindow):
                 background-color: #3d566e;
             }
         """)
-        self.extracts_btn.clicked.connect(lambda: self.show_coming_soon("Extracts"))
+        self.extracts_btn.clicked.connect(self.show_extracts)
         layout.addWidget(self.extracts_btn)
         
         # Button 4: Flashcards
@@ -210,10 +214,24 @@ class MainWindow(QMainWindow):
                 background-color: #3d566e;
             }
         """)
-    
+
+        self.extracts_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+            }
+            QPushButton:hover {
+                background-color: #3d566e;
+            }
+        """)
+
     def show_pdf_view(self):
-        """Show PDF reader view"""
+        """Show a PDF view"""
         self.stacked_widget.setCurrentWidget(self.pdf_view)
+        self.pdf_view.reload_extract_captures()
         self.pdf_view.setFocus()
         # Update sidebar highlighting
         self.library_btn.setStyleSheet("""
@@ -242,7 +260,73 @@ class MainWindow(QMainWindow):
                 background-color: #2980b9;
             }
         """)
+
+        self.extracts_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+            }
+            QPushButton:hover {
+                background-color: #3d566e;
+            }
+        """)
+
+    def show_extracts(self):
+        """Show the Extracts View and refresh its contents"""
+        self.stacked_widget.setCurrentWidget(self.extracts_view)
+        self.extracts_view.refresh()
+        self.extracts_view.setFocus()
+        # Update sidebar highlighting
+        self.library_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+            }
+            QPushButton:hover {
+                background-color: #3d566e;
+            }
+        """)
+
+        self.pdf_reader_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+            }
+            QPushButton:hover {
+                background-color: #3d566e;
+            }
+        """)
+
+        self.extracts_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
     
+    def db_conn(self):
+        """The library view's sqlite connection, extracts schema ensured."""
+        conn = getattr(self.library_view, "conn", None)
+        if conn is not None:
+            init_schema(conn)
+        return conn
+
     def open_current_pdf(self):
         """Open or show current PDF"""
         if self.current_pdf_path:

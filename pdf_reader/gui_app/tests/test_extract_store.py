@@ -4,7 +4,9 @@ import pytest
 
 from services.extract_store import (
     Capture,
+    capture_overlaps_extract,
     commit_working_set,
+    delete_extract,
     init_schema,
     list_docs_with_extracts,
     list_extracts_for_doc,
@@ -107,6 +109,23 @@ def test_commit_image_capture_stores_blob(conn):
     assert blob == b"PNGDATA"
 
 
+def test_image_blob_round_trips_through_list_extracts(conn):
+    """An image cap read back via the seam keeps its PNG blob intact."""
+    doc_id = seed_pdf(conn)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 256
+    commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=2, rect=(10, 20, 60, 40), kind="image", image_blob=png)],
+    )
+    extract = list_extracts_for_doc(conn, doc_id)[0]
+    cap = extract.captures[0]
+    assert cap.kind == "image"
+    assert cap.image_blob == png
+    assert cap.page == 2
+    assert cap.rect == (10, 20, 60, 40)
+
+
 def test_commit_mixed_captures_derived_type_combined(conn):
     doc_id = seed_pdf(conn)
     captures = [
@@ -143,8 +162,21 @@ def test_list_docs_with_extracts(conn):
     commit_working_set(conn, doc_a, [Capture(0, (0, 0, 1, 1), "text", "x")])
 
     docs = list_docs_with_extracts(conn)
-    assert doc_a in docs
-    assert doc_b not in docs
+    assert (doc_a, "a.pdf", "/tmp/a.pdf") in docs
+    assert all(d[0] != doc_b for d in docs)
+
+
+def test_list_docs_with_extracts_only_when_pdf_row_exists(conn):
+    """A cap with no library row (PDF removed) is hidden, per design."""
+    doc_a = seed_pdf(conn, "/tmp/a.pdf", "a.pdf")
+    doc_b = seed_pdf(conn, "/tmp/b.pdf", "b.pdf")
+    commit_working_set(conn, doc_a, [Capture(0, (0, 0, 1, 1), "text", "a minute")])
+    commit_working_set(conn, doc_b, [Capture(0, (0, 0, 1, 1), "text", "gone")])
+    conn.execute("DELETE FROM pdfs WHERE id = ?", (doc_b,))
+    conn.commit()
+
+    docs = list_docs_with_extracts(conn)
+    assert [d[0] for d in docs] == [doc_a]
 
 
 def test_list_extracts_for_doc_newest_first(conn):
@@ -210,3 +242,78 @@ def test_extracts_survive_reopen(conn, tmp_path):
     assert len(extracts) == 1
     assert extracts[0].captures[0].text_content == "persisted"
     c2.close()
+
+
+def test_overlap_true_for_rect_inside_capture(conn):
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="x")]
+    )
+    assert capture_overlaps_extract(conn, doc_id, 0, (20, 25, 30, 35)) is True
+
+
+def test_overlap_false_for_disjoint_rect(conn):
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="x")]
+    )
+    assert capture_overlaps_extract(conn, doc_id, 0, (200, 200, 300, 300)) is False
+
+
+def test_overlap_scoped_to_page(conn):
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="x")]
+    )
+    # Same rect on a different page must not overlap
+    assert capture_overlaps_extract(conn, doc_id, 1, (50, 30, 60, 35)) is False
+
+
+def test_overlap_scoped_to_doc(conn):
+    doc_a = seed_pdf(conn, "/tmp/a.pdf", "a.pdf")
+    doc_b = seed_pdf(conn, "/tmp/b.pdf", "b.pdf")
+    commit_working_set(
+        conn, doc_a, [Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="x")]
+    )
+    assert capture_overlaps_extract(conn, doc_b, 0, (50, 30, 60, 35)) is False
+
+
+def test_overlap_touching_edge_is_not_overlap(conn):
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="x")]
+    )
+    # Exactly touching the right edge of the capture: no area shared
+    assert capture_overlaps_extract(conn, doc_id, 0, (100, 20, 110, 40)) is False
+
+
+def test_delete_extract_cascades_captures(conn):
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="a"),
+            Capture(page=1, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG"),
+        ],
+    )
+    delete_extract(conn, extract_id)
+    assert conn.execute("SELECT COUNT(*) FROM extracts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 0
+    assert not list_extracts_for_doc(conn, doc_id)
+
+
+def test_delete_extract_leaves_other_extracts_untouched(conn):
+    doc_id = seed_pdf(conn)
+    keep = commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="keep")]
+    )
+    gone = commit_working_set(
+        conn, doc_id, [Capture(page=1, rect=(5, 5, 50, 50), kind="text", text_content="gone")]
+    )
+    delete_extract(conn, gone)
+
+    extracts = list_extracts_for_doc(conn, doc_id)
+    assert [e.id for e in extracts] == [keep]
+    assert extracts[0].captures[0].text_content == "keep"
+    assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 1

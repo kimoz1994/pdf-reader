@@ -2,15 +2,15 @@
 
 A desktop PDF reader for studying: read documents in a keyboard-driven reader, extract highlights into notes, and review them later.
 
-It helps people who read PDFs for learning — course materials, papers, and technical docs — capture what matters without leaving the reading flow. Select text or an image, press `e`, and it becomes a persistent extract you can edit and review in a dedicated Extracts view.
+It helps people who read PDFs for learning — course materials, papers, and technical docs — capture what matters without leaving the reading flow. Select text (drag) or an image (click), press `e`, and it becomes a persistent extract you can review and delete from the reader or the dedicated Extracts view.
 
 ## Demo
 
-*Work in progress — screenshots will be added once the extract feature lands.*
+*Work in progress — screenshots will be added once the full extract workflow lands.*
 
 The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
 
-The text-capture workflow is in: drag over text to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting.
+The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first).
 
 ## Problem
 
@@ -33,7 +33,7 @@ cd pdf_reader/gui_app
 $env:PYTHONNOUSERSITE="1"; & "D:\volume\tempprograms\anaconda\envs\pdf-reader-clean\Scripts\pytest.exe" tests/
 ```
 
-Deps: `pytest` is in `requirements-dev.txt`. The GUI itself (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen.
+Deps: `pytest` is in `requirements-dev.txt`. The GUI itself (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen, click an image → yellow → `e` → blue, `d`-twice deletes, and the Extracts view lists/deletes.
 
 ## Monitoring
 
@@ -85,16 +85,16 @@ MainWindow
 │  (sidebar + view stack)
 ├── LibraryView       lists documents, opens a PDF
 ├── PdfReaderView     QPdfView-based reader (keys, search, page progress, extraction)
-├── ExtractsView      placeholder → will list/edit extracts per document
+├── ExtractsView      Documents → Extracts → Captures review + delete
 └── FlashcardsView    placeholder
 
 services/             engine modules (element detection, PDF loading, hints)
-                       — most are dormant, not wired into the GUI yet
+                       — element_detector is live (image click-capture), the rest dormant
 services/extract_store.py   headless extract/capture SQL seam (no Qt), pytest-tested
 services/pdf_geometry.py    layout/mapping math mirroring Qt's calculateDocumentLayout
 ```
 
-The reader renders pages through QtPdf (`QPdfView`); PyMuPDF is used for text search, and `QPdfDocument.getSelection` supplies the text payload for drag-captures. Highlight rects are computed by a Qt-mirroring layout model (`pdf_geometry.py`) so yellow/blue rects stay aligned with the rendered pages.
+The reader renders pages through QtPdf (`QPdfView`); PyMuPDF is used for text search, image element detection (for click-capture), and image blob rendering; `QPdfDocument.getSelection` supplies the text payload for drag-captures. Highlight rects are computed by a Qt-mirroring layout model (`pdf_geometry.py`) so yellow/blue rects stay aligned with the rendered pages.
 
 ## Project structure
 
@@ -112,13 +112,13 @@ pdf_reader/
 │   │   ├── services/
 │   │   │   ├── extract_store.py   headless extract/capture SQL seam (no Qt)
 │   │   │   ├── pdf_geometry.py    Qt-mirroring layout/mapping math
-│   │   │   └── (dormant) element_detector, pdf_loader, hint_generator,
-│   │   │             hint_overlay, search_engine
+│   │   │   ├── element_detector.py  live — image click-capture in the reader
+│   │   │   └── (dormant) pdf_loader, hint_generator, hint_overlay, search_engine
 │   │   ├── tests/            pytest (test_extract_store, test_pdf_geometry)
 │   │   └── views/
 │   │       ├── library_view.py
 │   │       ├── pdf_reader_view.py   the core reader
-│   │       ├── extracts_view.py     placeholder
+│   │       ├── extracts_view.py     Documents → Extracts → Captures + delete
 │   │       └── flashcards_view.py   placeholder
 │   └── pdfs/test.pdf         sample document
 ```
@@ -136,23 +136,21 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Limitations
 
-- The GUI view (`pdf_reader_view.py`) has no automated tests — drag→`e`→blue is verified manually; only the headless seams are pytest-covered.
-- The hint system (`services/hint_overlay.py`, `hint_generator.py`, `element_detector.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
-- The Extracts and Flashcards views are placeholders. Capture (`e`/`Esc`) is done; the hierarchy list, editing, delete, and jump-back remain.
+- The GUI view (`pdf_reader_view.py`) has no automated tests — drag→`e`→blue, image click-capture, and `d`-twice delete are verified manually; only the headless seams are pytest-covered.
+- The hint system (`services/hint_overlay.py`, `hint_generator.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
+- Editing captures and jump-back from the Extracts view are not done.
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
 - No packaging/installer yet; requires a Python environment.
 
 ## Future work
 
-1. Extracts view: hierarchy list (Documents → Extracts) + delete (`d`-twice in reader, confirm in list).
-2. Editing text captures + jump-back from the Extracts view.
-3. Image captures.
-4. Flashcard review from extracts.
-5. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
+1. Editing text captures + jump-back from the Extracts view.
+2. Flashcard review from extracts.
+3. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation
 
-This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, text-capture workflow shipped (drag → `e` → blue), Extracts view/editing planned; testing — headless seams pytest-covered, GUI verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
+This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, full capture workflow shipped (drag/click → `e` → blue, `d`-twice delete, Extracts view); testing — headless seams pytest-covered, GUI verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
 
 ---
 

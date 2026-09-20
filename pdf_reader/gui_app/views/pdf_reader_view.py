@@ -31,11 +31,13 @@ import pymupdf  # instead of fitz
 
 from services.extract_store import (
     Capture,
+    capture_overlaps_extract,
     commit_working_set as store_commit_working_set,
-    init_schema,
+    delete_extract,
     list_extracts_for_doc,
     resolve_doc_id,
 )
+from services.element_detector import ElementDetector
 from services.pdf_geometry import (
     CUSTOM,
     FIT_TO_WIDTH,
@@ -103,6 +105,8 @@ class HelpDialog(QDialog):
             ("e", "Extract", "Commit the Working Set as one Extract"),
             ("Esc", "Extract", "Clear the Working Set (yellow highlights)"),
             ("Drag mouse", "Extract", "Select text into the Working Set"),
+            ("Click image", "Extract", "Capture a detected image into the Working Set"),
+            ("d", "Extract", "Delete the newest Extract on this page (d twice to confirm)"),
             ("?", "Help", "Show this dialog"),
         ]
 
@@ -243,13 +247,21 @@ class PDFReaderView(QWidget):
         self.current_pdf = None
         self.doc = None  # QPdfDocument
         self.last_visible_page = 0
-        self._schema_initialized = False
 
         # Extract workflow state
         self.working_set = []  # list[Capture], the in-memory yellow set
         self.extract_captures = []  # list[Capture], blue re-draws from DB
         self.drag_start = None  # QPointF widget coords while selecting
         self.drag_current = None
+        self._delete_armed_id = None  # armed Extract id for d-twice delete
+        self._delete_timer = QTimer(self)
+        self._delete_timer.setSingleShot(True)
+        self._delete_timer.setInterval(2000)
+        self._delete_timer.timeout.connect(self._disarm_delete)
+        # Image-element detection cache (PDF-space bboxes per page)
+        self._detected_images = {}
+        self._mupdf_doc = None  # cached pymupdf handle for element detection
+        self._mupdf_path = None
 
         self.search_mode = False
         self.current_result_index = -1
@@ -391,10 +403,115 @@ class PDFReaderView(QWidget):
             if event.type() == QEvent.Type.MouseButtonRelease and self.drag_start is not None:
                 if event.button() == Qt.MouseButton.LeftButton:
                     self.drag_current = event.position() + offset
-                    self.add_drag_selection()
+                    if self._was_click():
+                        self._handle_page_click()
+                    else:
+                        self.add_drag_selection()
                 return False
 
         return super().eventFilter(obj, event)
+
+    def _was_click(self):
+        """A press-release with negligible movement is a click, not a drag."""
+        if self.drag_start is None or self.drag_current is None:
+            return False
+        dx = self.drag_current.x() - self.drag_start.x()
+        dy = self.drag_current.y() - self.drag_start.y()
+        return (dx * dx + dy * dy) < 16.0  # ~4px radius
+
+    def _handle_page_click(self):
+        """A click on a page: capture a detected image element, if any."""
+        start = self.drag_start
+        self.drag_start = None
+        self.drag_current = None
+        layout = self._current_layout()
+        if layout is None or self.doc is None:
+            self._refresh_highlights()
+            return
+        page_index = layout.widget_point_page_index((start.x(), start.y()))
+        if page_index is None:
+            self._refresh_highlights()
+            return
+        pdf_point = layout.widget_to_pdf(page_index, (start.x(), start.y()))
+        bbox = self._image_bbox_at_point(page_index, pdf_point)
+        if bbox is None:
+            self._refresh_highlights()
+            return
+        if self._capture_overlaps_extract(page_index, bbox):
+            self._refresh_highlights()
+            self.working_label.setText(
+                "Already extracted — cannot re-highlight (yellow)"
+            )
+            return
+        blob = self._render_image_png(page_index, bbox)
+        if blob is None:
+            self._refresh_highlights()
+            return
+        for cap in self.working_set:
+            if cap.page == page_index and cap.rect == bbox and cap.kind == "image":
+                self._refresh_highlights()
+                self.working_label.setText("Image already in Working Set")
+                return
+        self.working_set.append(
+            Capture(page=page_index, rect=bbox, kind="image", image_blob=blob)
+        )
+        self._refresh_highlights()
+
+    def _image_bbox_at_point(self, page_index: int, pdf_point) -> tuple | None:
+        """PDF-space bbox of a detected image under a PDF-space point, or None."""
+        for bbox in self._image_bboxes_for_page(page_index):
+            x0, y0, x1, y1 = bbox
+            px, py = pdf_point
+            if x0 <= px <= x1 and y0 <= py <= y1:
+                return bbox
+        return None
+
+    def _image_bboxes_for_page(self, page_index: int) -> list:
+        """Detected image bboxes (PDF-space) for a page, cached per page."""
+        if page_index in self._detected_images:
+            return self._detected_images[page_index]
+        bboxes = []
+        if self.current_pdf:
+            try:
+                doc = self._mupdf_doc_handle()
+                mupdf_page = doc[page_index]
+                for elem in ElementDetector(mupdf_page, page_index).get_images():
+                    bboxes.append(tuple(float(v) for v in elem.bbox))
+            except Exception as e:
+                print(f"Image detection error: {e}")
+        self._detected_images[page_index] = bboxes
+        return bboxes
+
+    def _mupdf_doc_handle(self):
+        """Cached pymupdf document handle for the current file, or None."""
+        if self._mupdf_doc is None or self._mupdf_path != self.current_pdf:
+            if self._mupdf_doc is not None:
+                try:
+                    self._mupdf_doc.close()
+                except Exception:
+                    pass
+            self._mupdf_doc = None
+            self._mupdf_path = self.current_pdf
+            self._detected_images = {}
+            if self.current_pdf:
+                try:
+                    self._mupdf_doc = pymupdf.open(self.current_pdf)
+                except Exception as e:
+                    print(f"Could not open document for detection: {e}")
+        return self._mupdf_doc
+
+    def _render_image_png(self, page_index: int, rect) -> bytes | None:
+        """Render a PDF-space rect on a page to a PNG blob."""
+        try:
+            doc = self._mupdf_doc_handle()
+            if doc is None:
+                return None
+            page = doc[page_index]
+            pix = page.get_pixmap(clip=rect)
+            return pix.tobytes("png")
+        except Exception as e:
+            print(f"Image render error: {e}")
+            return None
 
     # ------------------------------------------------------------
     # PDF loading with saved progress
@@ -624,7 +741,21 @@ class PDFReaderView(QWidget):
             return
 
         # Normal viewer mode (search bar not visible)
-        if key == Qt.Key.Key_Question:
+        if (
+            key == Qt.Key.Key_D
+            and modifiers == Qt.KeyboardModifier.NoModifier
+        ):
+            self._delete_key()
+            event.accept()
+            return
+
+        # Any other key in normal mode cancels an armed delete
+        if self._delete_armed_id is not None:
+            self._disarm_delete()
+
+        if (
+            key == Qt.Key.Key_Question
+        ):
             HelpDialog(self).exec()
             event.accept()
             return
@@ -911,19 +1042,17 @@ class PDFReaderView(QWidget):
         self.extract_captures = []
         self.drag_start = None
         self.drag_current = None
+        self._delete_armed_id = None
+        self._delete_timer.stop()
         self.working_label.setText("")
         self.highlight_overlay.set_working_rects([])
         self.highlight_overlay.set_extract_rects([])
 
     def _db_conn(self):
-        """The sqlite3 connection the library view keeps open, or None."""
+        """The shared sqlite connection MainWindow keeps open, or None."""
         main_window = self.window()
-        if hasattr(main_window, "library_view"):
-            conn = main_window.library_view.conn
-            if not self._schema_initialized:
-                init_schema(conn)
-                self._schema_initialized = True
-            return conn
+        if hasattr(main_window, "db_conn"):
+            return main_window.db_conn()
         return None
 
     def _current_doc_id(self):
@@ -995,12 +1124,21 @@ class PDFReaderView(QWidget):
         self.highlight_overlay.set_working_rects(working)
         self.highlight_overlay.set_extract_rects(extracts)
 
-        if self.working_set:
+        if self._delete_armed_id is not None:
+            self.working_label.setText(
+                "Delete armed: press d again to confirm"
+            )
+        elif self.working_set:
             self.working_label.setText(
                 f"Working Set: {len(self.working_set)} (e to commit, Esc to clear)"
             )
         else:
             self.working_label.setText("")
+
+    def reload_extract_captures(self):
+        """Reload blue extracts from the DB and repaint (used on re-show)."""
+        self._load_extracts_from_db()
+        self._refresh_highlights()
 
     def _load_extracts_from_db(self):
         """Reload blue extract rects for the current document from the DB."""
@@ -1034,6 +1172,49 @@ class PDFReaderView(QWidget):
         self.working_set = []
         self._refresh_highlights()
 
+    def _delete_key(self):
+        """First `d` arms delete for the current page's newest Extract;
+        a second `d` within the window confirms."""
+        if not self.current_pdf:
+            return
+        if self._delete_armed_id is None:
+            extract_id = self._newest_extract_on_page()
+            if extract_id is None:
+                self._refresh_highlights()
+                self.working_label.setText("No Extract on this page")
+                return
+            self._delete_armed_id = extract_id
+            self._delete_timer.start()
+            self.working_label.setText(
+                "Delete armed: press d again to confirm"
+            )
+        else:
+            conn = self._db_conn()
+            if conn is not None:
+                delete_extract(conn, self._delete_armed_id)
+            self._delete_armed_id = None
+            self._delete_timer.stop()
+            self._load_extracts_from_db()
+            self._refresh_highlights()
+            self.working_label.setText("Extract deleted (d)")
+
+    def _newest_extract_on_page(self):
+        """Id of the newest Extract that has a Capture on the current page."""
+        conn = self._db_conn()
+        doc_id = self._current_doc_id()
+        if conn is None or doc_id is None:
+            return None
+        for extract in list_extracts_for_doc(conn, doc_id):
+            if any(c.page == self.last_visible_page for c in extract.captures):
+                return extract.id
+        return None
+
+    def _disarm_delete(self):
+        """Cancel an armed delete without deleting (timeout or other key)."""
+        self._delete_armed_id = None
+        self._delete_timer.stop()
+        self._refresh_highlights()
+
     def update_selection_preview(self):
         """While dragging, show a live yellow rect in widget coordinates."""
         if self.drag_start is None or self.drag_current is None:
@@ -1062,15 +1243,15 @@ class PDFReaderView(QWidget):
         self._refresh_highlights(preview_widget_rect=clipped)
 
     def _capture_overlaps_extract(self, page_index: int, rect):
-        """True if a new capture rect would re-highlight an existing extract."""
-        x0, y0, x1, y1 = rect
-        for cap in self.extract_captures:
-            if cap.page != page_index:
-                continue
-            cx0, cy0, cx1, cy1 = cap.rect
-            if x0 < cx1 and cx0 < x1 and y0 < cy1 and cy0 < y1:
-                return True
-        return False
+        """True if a new capture rect would re-highlight an existing extract.
+
+        Uses the seam's overlap query (doc-scoped, page-scoped).
+        """
+        conn = self._db_conn()
+        doc_id = self._current_doc_id()
+        if conn is None or doc_id is None:
+            return False
+        return capture_overlaps_extract(conn, doc_id, page_index, rect)
 
     def add_drag_selection(self):
         """Turn the finished drag into a text Capture added to the Working Set."""

@@ -146,9 +146,58 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     return extracts
 
 
-def list_docs_with_extracts(conn) -> List[int]:
-    """Ids of Documents that have at least one Extract."""
+def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
+    """(doc_id, name, path) for Documents that have at least one Extract.
+
+    The pdfs join means a Document whose row has been removed (e.g. the PDF
+    was deleted from the library) no longer appears here — matching the
+    library's own "exists on disk" behaviour, by design.
+    """
     rows = conn.execute(
-        "SELECT DISTINCT doc_id FROM extracts ORDER BY doc_id"
+        """
+        SELECT DISTINCT e.doc_id, p.name, p.path
+        FROM extracts e
+        JOIN pdfs p ON p.id = e.doc_id
+        ORDER BY e.doc_id
+        """
     ).fetchall()
-    return [r[0] for r in rows]
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def capture_overlaps_extract(
+    conn, doc_id: int, page: int, rect: Tuple[float, float, float, float]
+) -> bool:
+    """True if any Extract Capture of `doc_id` overlaps `rect` on `page`.
+
+    Overlap means the rectangles share a non-zero area (touching edges do not
+    count). Scoped to the given document and page.
+    """
+    x0, y0, x1, y1 = rect
+    rows = conn.execute(
+        """
+        SELECT rect FROM captures
+        WHERE extract_id IN (
+            SELECT id FROM extracts WHERE doc_id = ?
+        )
+        AND page = ?
+        """,
+        (doc_id, page),
+    ).fetchall()
+    for (rect_str,) in rows:
+        cx0, cy0, cx1, cy1 = _rect_from_str(rect_str)
+        if x0 < cx1 and cx0 < x1 and y0 < cy1 and cy0 < y1:
+            return True
+    return False
+
+
+def delete_extract(conn, extract_id: int) -> None:
+    """Delete an Extract and all of its Captures (irreversible).
+
+    Uses the FK cascade for captures — the schema declares
+    `ON DELETE CASCADE` — but the caller must have foreign-key support
+    enabled on the connection for that rule to fire. To stay safe either
+    way, captures are removed explicitly in the same transaction.
+    """
+    conn.execute("DELETE FROM captures WHERE extract_id = ?", (extract_id,))
+    conn.execute("DELETE FROM extracts WHERE id = ?", (extract_id,))
+    conn.commit()
