@@ -483,12 +483,14 @@ def test_preview_all_empty_text_without_images_is_empty_marker():
     assert preview_for_extract(ex) == "(empty)"
 
 
-def test_preview_empty_text_with_images_falls_back_to_image_pages():
+def test_preview_combined_with_emptied_text_is_empty_marker_not_pages():
+    """Spec AC: an Extract whose text has been emptied shows (empty) —
+    even when image Captures remain (only pure image Extracts show pages)."""
     ex = make_extract(
         [text_cap(""), image_cap(page=5), image_cap(page=6)],
         etype="combined",
     )
-    assert preview_for_extract(ex) == "pp. 6–7"
+    assert preview_for_extract(ex) == "(empty)"
 
 
 def test_preview_skips_empty_text_and_uses_next_nonempty():

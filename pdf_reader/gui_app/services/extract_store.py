@@ -155,9 +155,10 @@ def preview_for_extract(extract: Extract) -> str:
     """One-line content preview for an Extract's row in the tree.
 
     First non-empty text Capture, whitespace-normalised and truncated to
-    ~60 characters with an ellipsis; falls back to the image Captures' page
-    span (`p. 4`, `pp. 4–5`, `pp. 1, 5`); `(empty)` when nothing usable
-    remains. Derived at render time — never persisted.
+    ~60 characters with an ellipsis. Image-only Extracts (no text Captures
+    at all) fall back to their page span (`p. 4`, `pp. 4–5`, `pp. 1, 5`);
+    a text-bearing Extract whose text is all empty shows `(empty)`.
+    Derived at render time — never persisted.
     """
     texts = [
         " ".join(c.text_content.split())
@@ -169,6 +170,9 @@ def preview_for_extract(extract: Extract) -> str:
         if len(snippet) > _PREVIEW_LEN:
             return snippet[:_PREVIEW_LEN] + "…"
         return snippet
+
+    if any(c.kind == "text" for c in extract.captures):
+        return "(empty)"
 
     pages = sorted({c.page + 1 for c in extract.captures if c.kind == "image"})
     if not pages:
