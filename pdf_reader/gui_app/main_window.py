@@ -7,11 +7,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from pathlib import Path
 
 from views.library_view import LibraryView
 from views.pdf_reader_view import PDFReaderView
 from views.extracts_view import ExtractsView
-from services.extract_store import init_schema
+from services.extract_store import init_schema, resolve_doc_id
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.pdf_view.back_requested.connect(self.go_to_library)
         self.pdf_view.progress_changed.connect(self.on_progress_changed)
         self.pdf_view.progress_changed.connect( self.library_view.update_progress)
+        self.extracts_view.jump_requested.connect(self.on_extract_jump)
         
         # Show library by default
         self.show_library()
@@ -343,6 +345,34 @@ class MainWindow(QMainWindow):
         self.current_pdf_path = pdf_path
         self.pdf_view.load_pdf(pdf_path)
         self.show_pdf_view()
+
+    def on_extract_jump(self, target: dict):
+        """Jump from the Extracts View to a Capture's original region."""
+        path = target.get("path")
+        conn = self.db_conn()
+        if not path or conn is None or resolve_doc_id(conn, path) is None:
+            QMessageBox.warning(
+                self,
+                "PDF Removed from Library",
+                "This Extract's PDF is no longer in the library:\n\n"
+                f"{path}\n\nRe-add it to the library to jump to the "
+                "original location.",
+            )
+            return
+        if not Path(path).exists():
+            QMessageBox.warning(
+                self,
+                "PDF Not Found",
+                "The PDF file for this Extract is missing from disk:\n\n"
+                f"{path}\n\nRestore the file to jump to the original "
+                "location.",
+            )
+            return
+        self.open_pdf(path)
+        page = target.get("page")
+        rect = target.get("rect")
+        if page is not None and rect:
+            self.pdf_view.focus_region(page, tuple(rect))
     
     def go_to_library(self):
         """Go back to library"""

@@ -42,6 +42,7 @@ from services.pdf_geometry import (
     CUSTOM,
     FIT_TO_WIDTH,
     PageLayout,
+    center_v_scroll,
     clip_widget_rect_to_page,
 )
 
@@ -55,6 +56,14 @@ def rect_to_qrectf(rect: tuple[float, float, float, float]) -> QRectF:
     """Build a QRectF from an (x0, y0, x1, y1) tuple (QRectF wants w/h)."""
     x0, y0, x1, y1 = rect
     return QRectF(x0, y0, x1 - x0, y1 - y0)
+
+
+def stroke_rect(painter, rect: QRectF, rgb: tuple, pen_width: int = 3,
+                fill_alpha: int = 80):
+    """Paint one translucent highlight rect (shared by all overlay layers)."""
+    painter.setPen(QPen(QColor(*rgb), pen_width))
+    painter.setBrush(QBrush(QColor(*rgb, fill_alpha)))
+    painter.drawRect(rect)
 
 
 class HelpDialog(QDialog):
@@ -184,6 +193,7 @@ class SearchHighlightOverlay(QWidget):
       - yellow working-set rectangles (transient pre-extract selection)
       - blue extract rectangles (persisted from the DB)
       - the current search result rect (yellow)
+      - the orange jump-back flash rect (temporary, ~1s)
     """
 
     def __init__(self, parent=None):
@@ -193,6 +203,7 @@ class SearchHighlightOverlay(QWidget):
         self.current_rect = None  # in widget coordinates (QRectF)
         self.working_rects = []  # in widget coordinates (QRectF)
         self.extract_rects = []  # in widget coordinates (QRectF)
+        self.flash_rect = None  # in widget coordinates (QRectF), temporary
 
     def set_current_rect(self, rect: QRectF | None):
         self.current_rect = rect
@@ -206,34 +217,31 @@ class SearchHighlightOverlay(QWidget):
         self.extract_rects = rects
         self.update()
 
+    def set_flash_rect(self, rect: QRectF | None):
+        self.flash_rect = rect
+        self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         # Persisted extracts: blue, underneath
-        if self.extract_rects:
-            pen = QPen(QColor(52, 152, 219), 3)
-            brush = QBrush(QColor(52, 152, 219, 80))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            for rect in self.extract_rects:
-                painter.drawRect(rect)
+        for rect in self.extract_rects:
+            stroke_rect(painter, rect, (52, 152, 219))
 
         # Working set: yellow, on top of the blue extracts
-        if self.working_rects:
-            pen = QPen(QColor(255, 255, 0), 3)
-            brush = QBrush(QColor(255, 255, 0, 80))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            for rect in self.working_rects:
-                painter.drawRect(rect)
+        for rect in self.working_rects:
+            stroke_rect(painter, rect, (255, 255, 0))
 
         if self.current_rect:
-            pen = QPen(QColor(255, 255, 0), 3)
-            brush = QBrush(QColor(255, 255, 0, 80))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            painter.drawRect(self.current_rect)
+            stroke_rect(painter, self.current_rect, (255, 255, 0))
+
+        # Jump-back flash: orange, on top of everything, temporary
+        if self.flash_rect:
+            stroke_rect(
+                painter, self.flash_rect, (230, 126, 34),
+                pen_width=4, fill_alpha=60,
+            )
 
 
 class PDFReaderView(QWidget):
@@ -259,6 +267,12 @@ class PDFReaderView(QWidget):
         self._delete_timer.setSingleShot(True)
         self._delete_timer.setInterval(2000)
         self._delete_timer.timeout.connect(self._disarm_delete)
+        # Jump-back flash state: (page_index, pdf_rect), orange outline, ~1s
+        self._flash_region = None
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setSingleShot(True)
+        self._flash_timer.setInterval(1000)
+        self._flash_timer.timeout.connect(self._clear_flash)
         # Image-element detection cache (PDF-space bboxes per page)
         self._detected_images = {}
         self._mupdf_doc = None  # cached pymupdf handle for element detection
@@ -629,6 +643,37 @@ class PDFReaderView(QWidget):
                 print(f"Error saving page to DB: {e}")
 
     def on_scroll(self, value: int):
+        self._refresh_highlights()
+
+    # ------------------------------------------------------------
+    # Jump-back: focus a Capture's original region
+    # ------------------------------------------------------------
+
+    def focus_region(self, page_index: int, rect: tuple):
+        """Centre a PDF-space rect on its page and flash it briefly.
+
+        Called by MainWindow after an Extracts View jump: the document is
+        already loaded (read progress restored), so this only navigates.
+        """
+        if self.doc is None:
+            return
+        count = self.doc.pageCount()
+        if count <= 0:
+            return
+        page_index = max(0, min(page_index, count - 1))
+        self.pdf_view.pageNavigator().jump(
+            page_index, QPointF(0.0, 0.0), 0.0
+        )
+        layout = self._current_layout()
+        if layout is not None:
+            target = center_v_scroll(layout, page_index, tuple(rect))
+            self.pdf_view.verticalScrollBar().setValue(target)
+        self._flash_region = (page_index, tuple(rect))
+        self._flash_timer.start()
+        self._refresh_highlights()
+
+    def _clear_flash(self):
+        self._flash_region = None
         self._refresh_highlights()
 
     # ------------------------------------------------------------
@@ -1049,9 +1094,12 @@ class PDFReaderView(QWidget):
         self.drag_current = None
         self._delete_armed_id = None
         self._delete_timer.stop()
+        self._flash_region = None
+        self._flash_timer.stop()
         self.working_label.setText("")
         self.highlight_overlay.set_working_rects([])
         self.highlight_overlay.set_extract_rects([])
+        self.highlight_overlay.set_flash_rect(None)
 
     def _db_conn(self):
         """The shared sqlite connection MainWindow keeps open, or None."""
@@ -1112,6 +1160,7 @@ class PDFReaderView(QWidget):
         if layout is None:
             self.highlight_overlay.set_working_rects([])
             self.highlight_overlay.set_extract_rects([])
+            self.highlight_overlay.set_flash_rect(None)
             return
         try:
             working = [
@@ -1122,12 +1171,19 @@ class PDFReaderView(QWidget):
                 rect_to_qrectf(layout.pdf_to_widget(c.page, c.rect))
                 for c in self.extract_captures
             ]
+            flash = None
+            if self._flash_region is not None:
+                flash_page, flash_rect = self._flash_region
+                flash = rect_to_qrectf(
+                    layout.pdf_to_widget(flash_page, flash_rect)
+                )
         except Exception:
             return
         if preview_widget_rect is not None:
             working.append(rect_to_qrectf(preview_widget_rect))
         self.highlight_overlay.set_working_rects(working)
         self.highlight_overlay.set_extract_rects(extracts)
+        self.highlight_overlay.set_flash_rect(flash)
 
         if self._delete_armed_id is not None:
             self.working_label.setText(
