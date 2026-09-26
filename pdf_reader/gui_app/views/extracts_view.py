@@ -32,8 +32,13 @@ from services.extract_store import (
 )
 
 
+def _cap_label(page: int, text: str) -> str:
+    """Display label for a text Capture row."""
+    return f"🔤 Page {page + 1}: {text}"
+
+
 class _CaptureTextDelegate(QStyledItemDelegate):
-    """Inline editor for text Captures (T1/#11).
+    """Inline editor for text Captures.
 
     Enter and focus-out save, Esc cancels — handled explicitly so the
     semantics do not depend on Qt's default edit-trigger behaviour.
@@ -67,7 +72,7 @@ class _CaptureTextDelegate(QStyledItemDelegate):
             self._close_editor(obj, QAbstractItemDelegate.EndEditHint.RevertModelCache)
             return True
         if event.type() == QEvent.Type.FocusOut:
-            if obj.property("_t1_closed"):
+            if obj.property("_edit_done"):
                 return True
             self.setModelData(obj, None, None)
             self._close_editor(obj, QAbstractItemDelegate.EndEditHint.NoHint)
@@ -75,7 +80,7 @@ class _CaptureTextDelegate(QStyledItemDelegate):
         return super().eventFilter(obj, event)
 
     def _close_editor(self, editor, hint):
-        editor.setProperty("_t1_closed", True)
+        editor.setProperty("_edit_done", True)
         self.closeEditor.emit(editor, hint)
         self._view._edit_item = None
 
@@ -162,7 +167,7 @@ class ExtractsView(QWidget):
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.itemActivated.connect(self._on_item_activated)
 
-        # Editing is driven explicitly by itemActivated (T1/#11), never by
+        # Editing is driven explicitly by itemActivated, never by
         # Qt's default edit triggers, so single-click never opens an editor.
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._capture_delegate = _CaptureTextDelegate(self)
@@ -231,9 +236,9 @@ class ExtractsView(QWidget):
                         cap_item.setIcon(0, icon)
                     else:
                         cap_item = QTreeWidgetItem(
-                            [f"🔤 Page {cap.page + 1}: {cap.text_content or ''}"]
+                            [_cap_label(cap.page, cap.text_content or "")]
                         )
-                        # Text Captures are editable (T1/#11); image rows are not.
+                        # Text Captures are editable; image rows are not.
                         cap_item.setFlags(cap_item.flags() | Qt.ItemFlag.ItemIsEditable)
                     cap_item.setData(
                         0, Qt.ItemDataRole.UserRole,
@@ -266,7 +271,7 @@ class ExtractsView(QWidget):
         self._jump_from_item(item)
 
     def _begin_capture_edit(self, item):
-        """Open the inline editor on a text Capture row (T1/#11)."""
+        """Open the inline editor on a text Capture row."""
         if self._edit_item is not None:
             return
         self._edit_item = item
@@ -291,7 +296,7 @@ class ExtractsView(QWidget):
         if update_capture_text(conn, capture_id, new_text):
             data["text"] = new_text
             item.setData(0, Qt.ItemDataRole.UserRole, data)
-            item.setText(0, f"🔤 Page {data['page'] + 1}: {new_text}")
+            item.setText(0, _cap_label(data["page"], new_text))
 
     def _jump_from_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}

@@ -193,7 +193,7 @@ def capture_overlaps_extract(
 
 
 def update_capture_text(conn, capture_id: int, new_text: str) -> bool:
-    """Replace a text Capture's stored text in place (T1/#11).
+    """Replace a text Capture's stored text in place.
 
     Rejects a trimmed-empty edit and non-text Captures: returns False and
     leaves the row untouched. Returns True only when the row was updated.

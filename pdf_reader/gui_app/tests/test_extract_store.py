@@ -44,6 +44,13 @@ def seed_pdf(conn, path="/tmp/book.pdf", name="book.pdf"):
     return conn.execute("SELECT id FROM pdfs WHERE path = ?", (path,)).fetchone()[0]
 
 
+def first_capture_id(conn, kind="text"):
+    row = conn.execute(
+        "SELECT id FROM captures WHERE kind = ? ORDER BY id", (kind,)
+    ).fetchone()
+    return row[0] if row else None
+
+
 def test_init_schema_creates_tables(conn):
     tables = {
         r[0]
@@ -346,9 +353,7 @@ def test_update_capture_text_replaces_text(conn):
             Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="other"),
         ],
     )
-    cap_id = conn.execute(
-        "SELECT id FROM captures WHERE text_content = ?", ("before",)
-    ).fetchone()[0]
+    cap_id = first_capture_id(conn)
 
     assert update_capture_text(conn, cap_id, "after") is True
 
@@ -366,7 +371,7 @@ def test_update_capture_text_rejects_empty_and_whitespace(conn):
     commit_working_set(
         conn, doc_id, [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="keep me")]
     )
-    cap_id = conn.execute("SELECT id FROM captures").fetchone()[0]
+    cap_id = first_capture_id(conn)
 
     assert update_capture_text(conn, cap_id, "") is False
     assert update_capture_text(conn, cap_id, "   \n\t ") is False
@@ -384,7 +389,7 @@ def test_update_capture_text_rejects_image_capture(conn):
     commit_working_set(
         conn, doc_id, [Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG")]
     )
-    cap_id = conn.execute("SELECT id FROM captures").fetchone()[0]
+    cap_id = first_capture_id(conn, kind="image")
 
     assert update_capture_text(conn, cap_id, "not allowed") is False
     row = conn.execute(
@@ -403,7 +408,7 @@ def test_updated_text_survives_reopen(conn, tmp_path):
     commit_working_set(
         conn, doc_id, [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="draft")]
     )
-    cap_id = conn.execute("SELECT id FROM captures").fetchone()[0]
+    cap_id = first_capture_id(conn)
     assert update_capture_text(conn, cap_id, "final wording") is True
     conn.close()
 
