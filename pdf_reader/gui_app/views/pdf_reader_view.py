@@ -247,6 +247,7 @@ class PDFReaderView(QWidget):
         self.current_pdf = None
         self.doc = None  # QPdfDocument
         self.last_visible_page = 0
+        self._loading_document = False
 
         # Extract workflow state
         self.working_set = []  # list[Capture], the in-memory yellow set
@@ -519,83 +520,87 @@ class PDFReaderView(QWidget):
 
     def load_pdf(self, pdf_path: str):
         # Clear existing document
-        if self.pdf_view:
-            self.pdf_view.setDocument(None)
-
-        if self.doc is not None:
-            self.doc.close()
-            self.doc = None
-
-        self.current_pdf = pdf_path
-        self.last_visible_page = 0
-        saved_page = 0
-        self.search_matches = []
-        self.current_result_index = -1
-        self.search_bar.set_match_count(0)
-        self.highlight_overlay.set_current_rect(None)
-
-        # Reset extraction workflow state for the new document
-        self._reset_extract_state()
-
+        self._loading_document = True
         try:
-            main_window = self.window()
-            if hasattr(main_window, "library_view"):
-                library_view = main_window.library_view
-                library_view.cursor.execute(
-                    "SELECT current_page FROM pdfs WHERE path = ?",
-                    (pdf_path,),
-                )
-                row = library_view.cursor.fetchone()
-                if row and row[0]:
-                    saved_page = max(0, int(row[0]) - 1)
-        except Exception as e:
-            print(f"Error restoring saved page: {e}")
+            if self.pdf_view:
+                self.pdf_view.setDocument(None)
+
+            if self.doc is not None:
+                self.doc.close()
+                self.doc = None
+
+            self.current_pdf = pdf_path
+            self.last_visible_page = 0
             saved_page = 0
+            self.search_matches = []
+            self.current_result_index = -1
+            self.search_bar.set_match_count(0)
+            self.highlight_overlay.set_current_rect(None)
 
-        self.doc = QPdfDocument(self)
-        self.doc.load(pdf_path)
-        count = self.doc.pageCount()
-        if count <= 0:
-            print(f"Could not load PDF: {pdf_path}")
-            self.doc = None
-            return
+            # Reset extraction workflow state for the new document
+            self._reset_extract_state()
 
-        saved_page = min(saved_page, count - 1)
+            try:
+                main_window = self.window()
+                if hasattr(main_window, "library_view"):
+                    library_view = main_window.library_view
+                    library_view.cursor.execute(
+                        "SELECT current_page FROM pdfs WHERE path = ?",
+                        (pdf_path,),
+                    )
+                    row = library_view.cursor.fetchone()
+                    if row and row[0]:
+                        saved_page = max(0, int(row[0]) - 1)
+            except Exception as e:
+                print(f"Error restoring saved page: {e}")
+                saved_page = 0
 
-        self.pdf_view.setDocument(self.doc)
-        self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
-        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-        self.zoom_label.setText("Zoom: Fit")
+            self.doc = QPdfDocument(self)
+            self.doc.load(pdf_path)
+            count = self.doc.pageCount()
+            if count <= 0:
+                print(f"Could not load PDF: {pdf_path}")
+                self.doc = None
+                return
 
-        # Re-draw persisted extracts (blue) for this document
-        self._load_extracts_from_db()
-        self._refresh_highlights()
+            saved_page = min(saved_page, count - 1)
 
-        # Jump to saved page
-        self.pdf_view.pageNavigator().jump(
-            saved_page, QPointF(0.0, 0.0), 0.0
-        )
+            self.pdf_view.setDocument(self.doc)
+            self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+            self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            self.zoom_label.setText("Zoom: Fit")
 
-        self.last_visible_page = saved_page
-        self.page_label.setText(
-            f"Page: {saved_page + 1}/{count}"
-        )
-        self.prev_btn.setEnabled(saved_page > 0)
-        self.next_btn.setEnabled(saved_page < count - 1)
+            # Re-draw persisted extracts (blue) for this document
+            self._load_extracts_from_db()
+            self._refresh_highlights()
 
-        if self.current_pdf:
-            self.progress_changed.emit(
-                self.current_pdf, saved_page + 1
+            # Jump to saved page
+            self.pdf_view.pageNavigator().jump(
+                saved_page, QPointF(0.0, 0.0), 0.0
             )
 
-        self.setFocus()
+            self.last_visible_page = saved_page
+            self.page_label.setText(
+                f"Page: {saved_page + 1}/{count}"
+            )
+            self.prev_btn.setEnabled(saved_page > 0)
+            self.next_btn.setEnabled(saved_page < count - 1)
+
+            if self.current_pdf:
+                self.progress_changed.emit(
+                    self.current_pdf, saved_page + 1
+                )
+
+            self.setFocus()
+        finally:
+            self._loading_document = False
 
     # ------------------------------------------------------------
     # Scroll / page change
     # ------------------------------------------------------------
 
     def on_page_changed(self, page_index: int):
-        if not self.doc:
+        if not self.doc or self._loading_document:
             return
 
         self.last_visible_page = page_index
@@ -1315,11 +1320,13 @@ class PDFReaderView(QWidget):
 
     def closeEvent(self, event):
         self._reset_extract_state()
+        self._loading_document = True
         if self.pdf_view:
             self.pdf_view.setDocument(None)
         if self.doc is not None:
             self.doc.close()
             self.doc = None
+        self._loading_document = False
         event.accept()
 
     def go_back(self):
