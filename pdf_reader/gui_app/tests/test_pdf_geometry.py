@@ -3,6 +3,7 @@ import pytest
 from services.pdf_geometry import (
     FIT_TO_WIDTH,
     PageLayout,
+    center_v_scroll,
     clip_widget_rect_to_page,
     qround_half_up,
 )
@@ -197,6 +198,49 @@ def test_pages_mapped_onto_report_oriented_probe():
     assert x0 == pytest.approx(45.0)
     assert y0 == 6.0
     assert x1 - x0 == pytest.approx(794.0)
+
+
+# ------------------- centre-scroll (jump-back) -------------------
+
+def test_center_v_scroll_centres_mid_page_rect():
+    layout = PageLayout(
+        PAGES_PTS, zoom=1.0, dpi=72.0, margins=(6, 6, 6, 6), spacing=3,
+        viewport_height=400,
+    )
+    # page0 top=6; rect y 300..500 -> doc 306..506 -> center 406
+    # raw = 406 - 200 = 206 ; max = 1615 - 400 = 1215 -> 206
+    assert center_v_scroll(layout, 0, (100.0, 300.0, 500.0, 500.0)) == 206
+
+
+def test_center_v_scroll_clamps_to_zero_near_top():
+    layout = PageLayout(
+        PAGES_PTS, zoom=1.0, dpi=72.0, margins=(6, 6, 6, 6), spacing=3,
+        viewport_height=400,
+    )
+    # center = 6 + 20 = 26 ; raw = 26 - 200 < 0 -> 0
+    assert center_v_scroll(layout, 0, (100.0, 0.0, 500.0, 40.0)) == 0
+
+
+def test_center_v_scroll_clamps_to_document_end_near_bottom():
+    layout = PageLayout(
+        PAGES_PTS, zoom=1.0, dpi=72.0, margins=(6, 6, 6, 6), spacing=3,
+        viewport_height=1400,
+    )
+    # document_height = 6+800+3+800+6 = 1615 -> max = 1615-1400 = 215
+    # page1 top = 809 ; rect y 760..800 -> doc 1569..1609 -> center 1589
+    # raw = 1589 - 700 = 889 > 215 -> clamped to 215
+    assert center_v_scroll(layout, 1, (100.0, 760.0, 500.0, 800.0)) == 215
+
+
+def test_center_v_scroll_uses_page_stacking_for_later_pages():
+    layout = PageLayout(
+        PAGES_PTS, zoom=1.0, dpi=72.0, margins=(6, 6, 6, 6), spacing=3,
+        viewport_height=400,
+    )
+    # page1 top = 6+800+3 = 809 ; rect y 100..300 -> doc 909..1109
+    # center 1009 ; raw = 1009 - 200 = 809 ; max = 1215 -> 809
+    # (if stacking were ignored the answer would be ~6, so this pins the bug)
+    assert center_v_scroll(layout, 1, (100.0, 100.0, 500.0, 300.0)) == 809
 
 
 # ------------------- misc -------------------

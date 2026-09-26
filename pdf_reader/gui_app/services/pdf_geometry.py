@@ -186,3 +186,20 @@ def clip_widget_rect_to_page(rect: Rect, page_rect: Rect) -> Rect:
     if cx0 >= cx1 or cy0 >= cy1:
         return (0, 0, 0, 0)
     return (cx0, cy0, cx1, cy1)
+
+
+def center_v_scroll(layout: "PageLayout", page_index: int, rect: Rect) -> int:
+    """Vertical scrollbar value that centres a PDF-space rect in the viewport.
+
+    Used by jump-back: maps the Capture's rect to document space (which
+    accounts for page stacking and FitToWidth scaling), targets the rect's
+    vertical centre, and clamps to the scrollbar's real range so Qt never
+    sees an out-of-range value.
+    """
+    _, y0, _, y1 = layout.pdf_to_doc(page_index, rect)
+    centre = (y0 + y1) / 2.0
+    raw = centre - layout.viewport_height / 2.0
+    if raw <= 0:
+        return 0
+    max_scroll = max(0, layout.document_height() - layout.viewport_height)
+    return min(qround_half_up(raw), max_scroll)

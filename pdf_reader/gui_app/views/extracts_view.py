@@ -18,8 +18,8 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap, QIcon
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap, QIcon, QBrush, QColor
 
 from services.extract_store import (
     delete_extract,
@@ -29,6 +29,8 @@ from services.extract_store import (
 
 
 class ExtractsView(QWidget):
+    # Payload: {"path", "page", "rect", "extract_id"} for the first Capture
+    jump_requested = pyqtSignal(dict)
     def __init__(self):
         super().__init__()
         self.setup_ui()
@@ -85,7 +87,8 @@ class ExtractsView(QWidget):
         layout.addWidget(self.empty_label)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Extracts"])
+        self.tree.setHeaderLabels(["Extracts", ""])
+        self.tree.setColumnWidth(1, 90)
         self.tree.setStyleSheet(
             """
             QTreeWidget {
@@ -102,6 +105,9 @@ class ExtractsView(QWidget):
             """
         )
         layout.addWidget(self.tree)
+
+        self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.itemActivated.connect(self._on_item_activated)
 
         self.setLayout(layout)
         self.refresh()
@@ -131,13 +137,23 @@ class ExtractsView(QWidget):
             doc_item = QTreeWidgetItem([name])
             doc_item.setData(0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id})
             for extract in extracts:
+                first_cap = extract.captures[0] if extract.captures else None
                 ex_item = QTreeWidgetItem(
                     [f"Extract #{extract.id} — {extract.type} "
-                     f"({len(extract.captures)} capture{'s' if len(extract.captures) != 1 else ''})"]
+                     f"({len(extract.captures)} capture{'s' if len(extract.captures) != 1 else ''})",
+                     "↱ Jump"]
                 )
                 ex_item.setData(
-                    0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id, "extract_id": extract.id}
+                    0, Qt.ItemDataRole.UserRole,
+                    {
+                        "doc_id": doc_id,
+                        "extract_id": extract.id,
+                        "path": path,
+                        "page": first_cap.page if first_cap else None,
+                        "rect": first_cap.rect if first_cap else None,
+                    },
                 )
+                ex_item.setForeground(1, QBrush(QColor("#3498db")))
                 for cap in extract.captures:
                     if cap.kind == "image" and cap.image_blob:
                         pix = QPixmap()
@@ -163,6 +179,22 @@ class ExtractsView(QWidget):
             self.tree.addTopLevelItem(doc_item)
 
         self.tree.expandAll()
+
+    def _on_item_clicked(self, item, column):
+        """Click on the Jump column of an Extract row triggers a jump."""
+        if column != 1:
+            return
+        self._jump_from_item(item)
+
+    def _on_item_activated(self, item, column):
+        """Enter (or double-click) on an Extract row triggers a jump."""
+        self._jump_from_item(item)
+
+    def _jump_from_item(self, item):
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        if data.get("page") is None or not data.get("path"):
+            return
+        self.jump_requested.emit(dict(data))
 
     def delete_selected(self):
         """Delete the selected Extract after a confirmation popup."""

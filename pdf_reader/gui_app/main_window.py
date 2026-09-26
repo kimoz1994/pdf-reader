@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from pathlib import Path
 
 from views.library_view import LibraryView
 from views.pdf_reader_view import PDFReaderView
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.pdf_view.back_requested.connect(self.go_to_library)
         self.pdf_view.progress_changed.connect(self.on_progress_changed)
         self.pdf_view.progress_changed.connect( self.library_view.update_progress)
+        self.extracts_view.jump_requested.connect(self.on_extract_jump)
         
         # Show library by default
         self.show_library()
@@ -343,6 +345,24 @@ class MainWindow(QMainWindow):
         self.current_pdf_path = pdf_path
         self.pdf_view.load_pdf(pdf_path)
         self.show_pdf_view()
+
+    def on_extract_jump(self, target: dict):
+        """Jump from the Extracts View to a Capture's original region."""
+        path = target.get("path")
+        if not path or not Path(path).exists():
+            QMessageBox.warning(
+                self,
+                "PDF Not Found",
+                "The PDF for this Extract is no longer available:\n\n"
+                f"{path}\n\nRe-add it to the library to jump to the "
+                "original location.",
+            )
+            return
+        self.open_pdf(path)
+        page = target.get("page")
+        rect = target.get("rect")
+        if page is not None and rect:
+            self.pdf_view.focus_region(page, tuple(rect))
     
     def go_to_library(self):
         """Go back to library"""
