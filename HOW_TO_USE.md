@@ -73,15 +73,12 @@ Mouse works too — scroll and click as usual.
    - Document rows show the PDF's own **title** (read from its metadata), falling back to a tidied filename (`2020-11-11_v5.0_Supermemo_lore.pdf` → `2020-11-11 v5.0 Supermemo lore`).
    - `Extract #2 — text (3 captures)` means “3 pieces captured together”.
    - Each Extract row **previews its content**: the opening of its first text (e.g. `…: The mitochondria is the powerhou…`), the page span for image-only extracts (`…: pp. 4–5`), or `(empty)` — so you know what's inside before opening it.
-3. **Fix a typo** in a saved text capture: **double-click the text capture row** (or select it and press `Enter`). An inline editor opens — type your correction, then:
-   - **`Enter`** or clicking away → saves
-   - **`Esc`** → cancels, old text stays
-   - (Blank text is rejected — an empty capture is never saved.)
+3. **Read an Extract full-page**: select an Extract row — or any Capture inside it — and press **Enter** (or double-click). The whole view becomes the **Extract Editor**: the group's text and images as one document, one block per capture, each marked with its page. It's read-only for now. **← Back** returns you to the tree with the same row still selected.
 4. **Delete an Extract**: select it and click **🗑️ Delete Selected** (you'll be asked to confirm). In the reader, the shortcut is **`d` twice**.
 
 ### 5. Jump back to where it came from
 
-Ever forget where a highlight came from? In the Extracts view, click **↱ Jump** on an Extract row (or press `Enter` on it):
+Ever forget where a highlight came from? In the Extracts view, click **↱ Jump** on an Extract row:
 
 - the reader opens the right document,
 - scrolls so the original region is **centered**, and
@@ -105,9 +102,8 @@ Everything — your library, your read position, your blue extracts — lives in
 | Reader | Discard pending selection(s) | `Esc` |
 | Reader | Delete newest Extract on this page | `d` `d` |
 | Reader | Navigate / search / zoom | `j` `k` `gg` `G` `Space` `/` `+` `-` |
-| Extracts view | Open an Extract's origin in the reader | **↱ Jump** (or `Enter` on the row) |
-| Extracts view | Edit a text capture | double-click the row → edit → `Enter` |
-| Extracts view | Cancel an edit | `Esc` |
+| Extracts view | Read an Extract full-page | select row → `Enter` / double-click → **← Back** |
+| Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
 | Extracts view | Delete an Extract | select → 🗑️ Delete Selected (confirm) |
 | Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
 
@@ -117,7 +113,7 @@ Everything — your library, your read position, your blue extracts — lives in
 
 These are designed and queued — don't look for them in the app today:
 
-- **Full-area Extract Editor** — the whole view becomes a Word-like editor showing a whole group's text *and* images together (spec #22, tickets #24–#25)
+- **Editing in the Extract Editor** — reading mode has shipped; typing (including the old typo-fix flow, whose inline row editor is now retired) arrives with ticket #25
 - **Round-trip back** from a jumped-to region to the Extract list (#13)
 - **Per-capture jump rows** (#14)
 - **Flashcards** (sidebar button says “coming soon”)

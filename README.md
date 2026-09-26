@@ -12,7 +12,7 @@ It helps people who read PDFs for learning — course materials, papers, and tec
 
 The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
 
-The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Text captures can be edited inline from the Extracts view (double-click the row; `Enter` saves, `Esc` cancels), and **↱ Jump** (or `Enter` on an Extract row) reopens the reader centered on the original region with a brief orange flash.
+The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Select an Extract — or any capture inside it — and press `Enter` (or double-click) to open the full-area **Extract Editor**, which shows the whole group as one page-marked, read-only document (`← Back` returns to the tree). **↱ Jump** (click) reopens the reader centered on the original region with a brief orange flash.
 
 ## Problem
 
@@ -35,7 +35,7 @@ cd pdf_reader/gui_app
 $env:PYTHONNOUSERSITE="1"; & "D:\volume\tempprograms\anaconda\envs\pdf-reader-clean\Scripts\pytest.exe" tests/
 ```
 
-Deps: `pytest` is in `requirements-dev.txt`. The GUI itself (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen, click an image → yellow → `e` → blue, `d`-twice deletes, the Extracts view lists/deletes, text captures edit inline, and ↱ Jump reopens the reader centered on the region.
+Deps: `pytest` is in `requirements-dev.txt`. The GUI itself (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen, click an image → yellow → `e` → blue, `d`-twice deletes, the Extracts view lists/deletes, `Enter` opens the read-only Extract Editor, and ↱ Jump reopens the reader centered on the region.
 
 ## Monitoring
 
@@ -146,13 +146,13 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Future work
 
-1. Full-area **Extract Editor** (spec #22); round-trip return from jump (#13).
+1. **Editing** inside the Extract Editor (#25); round-trip return from jump (#13).
 2. Flashcard review from extracts.
 3. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation
 
-This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, full capture workflow shipped (drag/click → `e` → blue, `d`-twice delete, Extracts view, inline capture editing, jump-back with centering flash); testing — headless seams pytest-covered, GUI verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
+This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, full capture workflow shipped (drag/click → `e` → blue, `d`-twice delete, Extracts view, Extract Editor (read mode), jump-back with centering flash); testing — headless seams pytest-covered, GUI verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
 
 ---
 

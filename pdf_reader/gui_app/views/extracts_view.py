@@ -21,9 +21,11 @@ from PyQt6.QtWidgets import (
     QAbstractItemDelegate,
     QStyledItemDelegate,
     QHeaderView,
+    QScrollArea,
+    QFrame,
 )
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtCore import Qt, QEvent, QItemSelectionModel, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QPixmap
 
 from services.extract_store import (
     delete_extract,
@@ -110,6 +112,7 @@ class ExtractsView(QWidget):
 
         header = QLabel("📝 Extracts")
         header.setStyleSheet("font-size: 28px; font-weight: bold; color: #3498db;")
+        self.header_label = header
         layout.addWidget(header)
 
         buttons = QHBoxLayout()
@@ -181,8 +184,68 @@ class ExtractsView(QWidget):
         self._capture_delegate = _CaptureTextDelegate(self)
         self.tree.setItemDelegateForColumn(0, self._capture_delegate)
 
+        self._build_editor_page(layout)
+        self._return_item = None
+        self._return_expanded = []
+
         self.setLayout(layout)
         self.refresh()
+
+    def _build_editor_page(self, layout):
+        """The full-area Extract Editor (reading mode): Back + title +
+        a scrollable paper document with one block per Capture."""
+        self.editor_page = QWidget()
+        ed = QVBoxLayout(self.editor_page)
+        ed.setContentsMargins(30, 30, 30, 30)
+        ed.setSpacing(15)
+
+        back_row = QHBoxLayout()
+        self.back_btn = QPushButton("← Back")
+        self.back_btn.setFixedHeight(40)
+        self.back_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: transparent;
+                color: #3498db;
+                border: 1px solid #3498db;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 0 18px;
+            }
+            QPushButton:hover { background-color: #3498db; color: white; }
+            """
+        )
+        self.back_btn.clicked.connect(self._close_editor)
+        back_row.addWidget(self.back_btn)
+        back_row.addStretch()
+        ed.addLayout(back_row)
+
+        self.editor_title = QLabel()
+        self.editor_title.setStyleSheet(
+            "font-size: 22px; font-weight: bold; color: #3498db;"
+        )
+        ed.addWidget(self.editor_title)
+
+        self.editor_scroll = QScrollArea()
+        self.editor_scroll.setWidgetResizable(True)
+        self.editor_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.editor_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+        self.editor_doc = QWidget()
+        self.editor_doc.setStyleSheet(
+            "background-color: #f7f7f5; border-radius: 8px;"
+        )
+        self.editor_layout = QVBoxLayout(self.editor_doc)
+        self.editor_layout.setContentsMargins(40, 30, 40, 30)
+        self.editor_layout.setSpacing(18)
+        self.editor_layout.addStretch()
+        self.editor_scroll.setWidget(self.editor_doc)
+        ed.addWidget(self.editor_scroll)
+
+        self.editor_page.hide()
+        layout.addWidget(self.editor_page)
 
     def refresh(self):
         """Reload the Document -> Extract -> Capture hierarchy."""
@@ -264,12 +327,133 @@ class ExtractsView(QWidget):
         self._jump_from_item(item)
 
     def _on_item_activated(self, item, column):
-        """Enter/double-click: edit a text Capture, jump from an Extract row."""
-        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-        if data.get("kind") == "text" and data.get("capture_id") is not None:
-            self._begin_capture_edit(item)
+        """Enter/double-click: the ↱ column still jumps; every other row
+        (Extract or Capture) opens the full-area Extract Editor."""
+        if column == 1:
+            self._jump_from_item(item)
             return
-        self._jump_from_item(item)
+        self._open_editor(item)
+
+    def _open_editor(self, item):
+        """Open the editor for the Extract owning `item` — either the
+        Extract row itself or one of its Capture rows. Document rows are
+        a no-op (they own no single Extract)."""
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        if data.get("extract_id") is None:
+            parent = item.parent()
+            data = (parent.data(0, Qt.ItemDataRole.UserRole) or {}) if parent else {}
+        if data.get("extract_id") is None or data.get("doc_id") is None:
+            return
+        conn = self._db_conn()
+        if conn is None:
+            return
+        extract = next(
+            (
+                e
+                for e in list_extracts_for_doc(conn, data["doc_id"])
+                if e.id == data["extract_id"]
+            ),
+            None,
+        )
+        if extract is None:
+            return
+        self._show_editor(extract, data, item)
+
+    def _show_editor(self, extract, data, origin_item):
+        """Swap the tree page for the editor and render the document."""
+        # Remember tree state so Back can return to exactly this row.
+        self._return_item = origin_item
+        self._return_expanded = []
+        for i in range(self.tree.topLevelItemCount()):
+            doc_item = self.tree.topLevelItem(i)
+            self._return_expanded.append((doc_item, doc_item.isExpanded()))
+            for j in range(doc_item.childCount()):
+                ex_item = doc_item.child(j)
+                self._return_expanded.append((ex_item, ex_item.isExpanded()))
+
+        path = data.get("path") or ""
+        title = f"Extract #{extract.id} — {extract.type}"
+        if path:
+            title += f"  ·  {display_title(path, Path(path).name)}"
+        self.editor_title.setText(title)
+
+        while self.editor_layout.count():
+            block = self.editor_layout.takeAt(0)
+            w = block.widget()
+            if w is not None:
+                w.deleteLater()
+        for cap in extract.captures:
+            self._add_block(cap)
+        self.editor_layout.addStretch()
+
+        self.header_label.hide()
+        self.refresh_btn.hide()
+        self.delete_btn.hide()
+        self.empty_label.hide()
+        self.tree.hide()
+        self.editor_page.show()
+        self.editor_scroll.verticalScrollBar().setValue(0)
+        self.back_btn.setFocus()
+
+    def _add_block(self, cap):
+        """One page-marked document block for a single Capture."""
+        marker = QLabel(f"Page {cap.page + 1}")
+        marker.setObjectName("page_marker")
+        marker.setStyleSheet("color: #999; font-size: 12px; font-weight: bold;")
+        self.editor_layout.addWidget(marker)
+
+        if cap.kind == "image" and cap.image_blob:
+            image_label = QLabel()
+            image_label.setObjectName("cap_image")
+            pix = QPixmap()
+            if pix.loadFromData(cap.image_blob):
+                pix = pix.scaledToWidth(
+                    min(pix.width(), 720),
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                image_label.setPixmap(pix)
+            else:
+                image_label.setText("(image could not be loaded)")
+            image_label.setStyleSheet(
+                "background: white; border: 1px solid #ddd; padding: 6px;"
+            )
+            image_label.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.editor_layout.addWidget(image_label)
+        else:
+            text_label = QLabel((cap.text_content or "").strip())
+            text_label.setObjectName("cap_text")
+            text_label.setTextFormat(Qt.TextFormat.PlainText)
+            text_label.setWordWrap(True)
+            text_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            text_label.setStyleSheet("color: #1a1a1a; font-size: 15px;")
+            self.editor_layout.addWidget(text_label)
+
+    def _close_editor(self):
+        """Back: hide the editor, restore the tree exactly as it was."""
+        self.editor_page.hide()
+        self.header_label.show()
+        self.refresh_btn.show()
+        self.delete_btn.show()
+        if self.tree.topLevelItemCount():
+            self.tree.show()
+        else:
+            self.empty_label.show()
+        for item, expanded in self._return_expanded:
+            item.setExpanded(expanded)
+        if self._return_item is not None:
+            self.tree.setCurrentItem(
+                self._return_item,
+                0,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect,
+            )
+            self.tree.scrollToItem(self._return_item)
+        self._return_item = None
+        self._return_expanded = []
+        self.tree.setFocus()
 
     def _begin_capture_edit(self, item):
         """Open the inline editor on a text Capture row."""
