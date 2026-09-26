@@ -5,7 +5,9 @@ Pure Python + sqlite3, no Qt imports — this is the single testable seam
 for the extract workflow. The GUI never touches these tables directly.
 """
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Tuple
+import os
 
 
 @dataclass
@@ -148,6 +150,42 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     return extracts
 
 
+_PREVIEW_LEN = 60
+
+
+def preview_for_extract(extract: Extract) -> str:
+    """One-line content preview for an Extract's row in the tree.
+
+    First non-empty text Capture, whitespace-normalised and truncated to
+    ~60 characters with an ellipsis. Image-only Extracts (no text Captures
+    at all) fall back to their page span (`p. 4`, `pp. 4–5`, `pp. 1, 5`);
+    a text-bearing Extract whose text is all empty shows `(empty)`.
+    Derived at render time — never persisted.
+    """
+    texts = [
+        " ".join(c.text_content.split())
+        for c in extract.captures
+        if c.kind == "text" and c.text_content and c.text_content.strip()
+    ]
+    if texts:
+        snippet = texts[0]
+        if len(snippet) > _PREVIEW_LEN:
+            return snippet[:_PREVIEW_LEN] + "…"
+        return snippet
+
+    if any(c.kind == "text" for c in extract.captures):
+        return "(empty)"
+
+    pages = sorted({c.page + 1 for c in extract.captures if c.kind == "image"})
+    if not pages:
+        return "(empty)"
+    if len(pages) == 1:
+        return f"p. {pages[0]}"
+    if pages == list(range(pages[0], pages[-1] + 1)):
+        return f"pp. {pages[0]}–{pages[-1]}"
+    return "pp. " + ", ".join(str(p) for p in pages)
+
+
 def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
     """(doc_id, name, path) for Documents that have at least one Extract.
 
@@ -164,6 +202,45 @@ def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
         """
     ).fetchall()
     return [(r[0], r[1], r[2]) for r in rows]
+
+
+# (path -> (mtime, title)) so a refresh does not reopen every PDF.
+_title_cache: dict = {}
+
+
+def display_title(path: str, name: str) -> str:
+    """Human-readable title for a Document row: the PDF's metadata title
+    when present, else the filename cleaned up (`.pdf` stripped, `_` → space).
+
+    Falls back to the cleaned filename for missing/unreadable files.
+    Cached by (path, mtime) — a resaved PDF is re-read.
+    """
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return _clean_fallback(name)
+
+    cached = _title_cache.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    title = _clean_fallback(name)
+    try:
+        import pymupdf
+
+        with pymupdf.open(path) as doc:
+            meta_title = ((doc.metadata or {}).get("title") or "").strip()
+        if meta_title:
+            title = meta_title
+    except Exception:
+        pass
+
+    _title_cache[path] = (mtime, title)
+    return title
+
+
+def _clean_fallback(name: str) -> str:
+    return Path(name).stem.replace("_", " ")
 
 
 def capture_overlaps_extract(

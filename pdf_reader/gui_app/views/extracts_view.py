@@ -20,14 +20,17 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractItemDelegate,
     QStyledItemDelegate,
+    QHeaderView,
 )
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor
 
 from services.extract_store import (
     delete_extract,
+    display_title,
     list_docs_with_extracts,
     list_extracts_for_doc,
+    preview_for_extract,
     update_capture_text,
 )
 
@@ -147,6 +150,11 @@ class ExtractsView(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Extracts", ""])
         self.tree.setColumnWidth(1, 90)
+        # Column 0 (labels + previews) takes all spare width; the Jump
+        # column stays at 90px. Without this the default stretch-last-section
+        # squeezes col 0 to ~100px and elides every preview away.
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree.setStyleSheet(
             """
             QTreeWidget {
@@ -199,14 +207,17 @@ class ExtractsView(QWidget):
         self.tree.show()
 
         for name, path, doc_id, extracts in rows:
-            doc_item = QTreeWidgetItem([name])
+            doc_item = QTreeWidgetItem([display_title(path, name)])
             doc_item.setData(0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id})
             for extract in extracts:
                 first_cap = extract.captures[0] if extract.captures else None
+                count = len(extract.captures)
+                base_label = (
+                    f"Extract #{extract.id} — {extract.type} "
+                    f"({count} capture{'s' if count != 1 else ''})"
+                )
                 ex_item = QTreeWidgetItem(
-                    [f"Extract #{extract.id} — {extract.type} "
-                     f"({len(extract.captures)} capture{'s' if len(extract.captures) != 1 else ''})",
-                     "↱ Jump"]
+                    [f"{base_label}: {preview_for_extract(extract)}", "↱ Jump"]
                 )
                 ex_item.setData(
                     0, Qt.ItemDataRole.UserRole,
@@ -221,19 +232,9 @@ class ExtractsView(QWidget):
                 ex_item.setForeground(1, QBrush(QColor("#3498db")))
                 for cap in extract.captures:
                     if cap.kind == "image" and cap.image_blob:
-                        pix = QPixmap()
-                        if pix.loadFromData(cap.image_blob):
-                            icon = QIcon(
-                                pix.scaled(
-                                    64, 64,
-                                    Qt.AspectRatioMode.KeepAspectRatio,
-                                    Qt.TransformationMode.SmoothTransformation,
-                                )
-                            )
-                        else:
-                            icon = QIcon()
+                        # No thumbnail icon: at row height it was an
+                        # illegible (often blank-white) rectangle.
                         cap_item = QTreeWidgetItem([f"🖼️ Image — page {cap.page + 1}"])
-                        cap_item.setIcon(0, icon)
                     else:
                         cap_item = QTreeWidgetItem(
                             [_cap_label(cap.page, cap.text_content or "")]

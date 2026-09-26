@@ -12,7 +12,7 @@ It helps people who read PDFs for learning — course materials, papers, and tec
 
 The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
 
-The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first). Text captures can be edited inline from the Extracts view (double-click the row; `Enter` saves, `Esc` cancels), and **↱ Jump** (or `Enter` on an Extract row) reopens the reader centered on the original region with a brief orange flash.
+The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Text captures can be edited inline from the Extracts view (double-click the row; `Enter` saves, `Esc` cancels), and **↱ Jump** (or `Enter` on an Extract row) reopens the reader centered on the original region with a brief orange flash.
 
 ## Problem
 
@@ -140,13 +140,13 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 - The GUI view (`pdf_reader_view.py`) has no automated tests — drag→`e`→blue, image click-capture, and `d`-twice delete are verified manually; only the headless seams are pytest-covered.
 - The hint system (`services/hint_overlay.py`, `hint_generator.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
-- Extract rows have no content previews yet, and editing is row-level (a full-area group editor is in progress — see Future work).
+- Extract editing is still row-level (a full-area group editor is in progress — see Future work).
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
 - No packaging/installer yet; requires a Python environment.
 
 ## Future work
 
-1. Full-area **Extract Editor** with Extract-row previews (spec #22); round-trip return from jump (#13).
+1. Full-area **Extract Editor** (spec #22); round-trip return from jump (#13).
 2. Flashcard review from extracts.
 3. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
