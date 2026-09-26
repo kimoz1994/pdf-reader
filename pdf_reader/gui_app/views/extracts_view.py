@@ -17,15 +17,67 @@ from PyQt6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QMessageBox,
+    QAbstractItemView,
+    QAbstractItemDelegate,
+    QStyledItemDelegate,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal
 from PyQt6.QtGui import QPixmap, QIcon, QBrush, QColor
 
 from services.extract_store import (
     delete_extract,
     list_docs_with_extracts,
     list_extracts_for_doc,
+    update_capture_text,
 )
+
+
+class _CaptureTextDelegate(QStyledItemDelegate):
+    """Inline editor for text Captures (T1/#11).
+
+    Enter and focus-out save, Esc cancels — handled explicitly so the
+    semantics do not depend on Qt's default edit-trigger behaviour.
+    """
+
+    def __init__(self, view):
+        super().__init__(view)
+        self._view = view
+
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        editor.installEventFilter(self)
+        return editor
+
+    def setEditorData(self, editor, index):
+        data = self._view._edit_item_data()
+        editor.setText((data or {}).get("text", ""))
+
+    def setModelData(self, editor, model, index):
+        self._view._apply_capture_edit(editor.text())
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress and event.key() in (
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+        ):
+            self.setModelData(obj, None, None)
+            self._close_editor(obj, QAbstractItemDelegate.EndEditHint.NoHint)
+            return True
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self._close_editor(obj, QAbstractItemDelegate.EndEditHint.RevertModelCache)
+            return True
+        if event.type() == QEvent.Type.FocusOut:
+            if obj.property("_t1_closed"):
+                return True
+            self.setModelData(obj, None, None)
+            self._close_editor(obj, QAbstractItemDelegate.EndEditHint.NoHint)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _close_editor(self, editor, hint):
+        editor.setProperty("_t1_closed", True)
+        self.closeEditor.emit(editor, hint)
+        self._view._edit_item = None
 
 
 class ExtractsView(QWidget):
@@ -33,6 +85,7 @@ class ExtractsView(QWidget):
     jump_requested = pyqtSignal(dict)
     def __init__(self):
         super().__init__()
+        self._edit_item = None
         self.setup_ui()
 
     def _db_conn(self):
@@ -109,11 +162,18 @@ class ExtractsView(QWidget):
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.itemActivated.connect(self._on_item_activated)
 
+        # Editing is driven explicitly by itemActivated (T1/#11), never by
+        # Qt's default edit triggers, so single-click never opens an editor.
+        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._capture_delegate = _CaptureTextDelegate(self)
+        self.tree.setItemDelegateForColumn(0, self._capture_delegate)
+
         self.setLayout(layout)
         self.refresh()
 
     def refresh(self):
         """Reload the Document -> Extract -> Capture hierarchy."""
+        self._edit_item = None
         self.tree.clear()
         conn = self._db_conn()
         if conn is None:
@@ -173,6 +233,17 @@ class ExtractsView(QWidget):
                         cap_item = QTreeWidgetItem(
                             [f"🔤 Page {cap.page + 1}: {cap.text_content or ''}"]
                         )
+                        # Text Captures are editable (T1/#11); image rows are not.
+                        cap_item.setFlags(cap_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    cap_item.setData(
+                        0, Qt.ItemDataRole.UserRole,
+                        {
+                            "capture_id": cap.id,
+                            "kind": cap.kind,
+                            "page": cap.page,
+                            "text": cap.text_content or "",
+                        },
+                    )
                     ex_item.addChild(cap_item)
                 doc_item.addChild(ex_item)
             doc_item.setExpanded(True)
@@ -187,8 +258,40 @@ class ExtractsView(QWidget):
         self._jump_from_item(item)
 
     def _on_item_activated(self, item, column):
-        """Enter (or double-click) on an Extract row triggers a jump."""
+        """Enter/double-click: edit a text Capture, jump from an Extract row."""
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        if data.get("kind") == "text" and data.get("capture_id") is not None:
+            self._begin_capture_edit(item)
+            return
         self._jump_from_item(item)
+
+    def _begin_capture_edit(self, item):
+        """Open the inline editor on a text Capture row (T1/#11)."""
+        if self._edit_item is not None:
+            return
+        self._edit_item = item
+        self.tree.editItem(item, 0)
+
+    def _edit_item_data(self):
+        if self._edit_item is None:
+            return None
+        return self._edit_item.data(0, Qt.ItemDataRole.UserRole) or {}
+
+    def _apply_capture_edit(self, new_text: str):
+        """Persist an inline edit; empty/whitespace edits are rejected by the
+        store and leave both the row and the displayed label untouched."""
+        item = self._edit_item
+        if item is None:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        capture_id = data.get("capture_id")
+        conn = self._db_conn()
+        if capture_id is None or conn is None:
+            return
+        if update_capture_text(conn, capture_id, new_text):
+            data["text"] = new_text
+            item.setData(0, Qt.ItemDataRole.UserRole, data)
+            item.setText(0, f"🔤 Page {data['page'] + 1}: {new_text}")
 
     def _jump_from_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}

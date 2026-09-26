@@ -11,6 +11,7 @@ from services.extract_store import (
     list_docs_with_extracts,
     list_extracts_for_doc,
     resolve_doc_id,
+    update_capture_text,
 )
 
 
@@ -317,3 +318,98 @@ def test_delete_extract_leaves_other_extracts_untouched(conn):
     assert [e.id for e in extracts] == [keep]
     assert extracts[0].captures[0].text_content == "keep"
     assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 1
+
+
+def test_list_extracts_includes_capture_ids(conn):
+    """Captures read back carry their row id (needed for in-place edits)."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="first"),
+            Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="second"),
+        ],
+    )
+    caps = list_extracts_for_doc(conn, doc_id)[0].captures
+    assert all(c.id is not None for c in caps)
+    assert caps[0].id != caps[1].id
+
+
+def test_update_capture_text_replaces_text(conn):
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="before"),
+            Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="other"),
+        ],
+    )
+    cap_id = conn.execute(
+        "SELECT id FROM captures WHERE text_content = ?", ("before",)
+    ).fetchone()[0]
+
+    assert update_capture_text(conn, cap_id, "after") is True
+
+    extracts = list_extracts_for_doc(conn, doc_id)
+    assert extracts[0].id == extract_id
+    assert extracts[0].captures[0].text_content == "after"
+    assert extracts[0].captures[1].text_content == "other"
+    # Geometry untouched: only text_content changes
+    assert extracts[0].captures[0].rect == (0, 0, 1, 1)
+
+
+def test_update_capture_text_rejects_empty_and_whitespace(conn):
+    """A trimmed-empty edit is rejected and leaves stored text untouched."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="keep me")]
+    )
+    cap_id = conn.execute("SELECT id FROM captures").fetchone()[0]
+
+    assert update_capture_text(conn, cap_id, "") is False
+    assert update_capture_text(conn, cap_id, "   \n\t ") is False
+    assert (
+        conn.execute(
+            "SELECT text_content FROM captures WHERE id = ?", (cap_id,)
+        ).fetchone()[0]
+        == "keep me"
+    )
+
+
+def test_update_capture_text_rejects_image_capture(conn):
+    """Image Captures have no editable text — store refuses even with an id."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG")]
+    )
+    cap_id = conn.execute("SELECT id FROM captures").fetchone()[0]
+
+    assert update_capture_text(conn, cap_id, "not allowed") is False
+    row = conn.execute(
+        "SELECT text_content, image_blob FROM captures WHERE id = ?", (cap_id,)
+    ).fetchone()
+    assert row == (None, b"PNG")
+
+
+def test_update_capture_text_unknown_id_returns_false(conn):
+    assert update_capture_text(conn, 9999, "anything") is False
+
+
+def test_updated_text_survives_reopen(conn, tmp_path):
+    """The edited text persists across an app restart (store-seam AC)."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="draft")]
+    )
+    cap_id = conn.execute("SELECT id FROM captures").fetchone()[0]
+    assert update_capture_text(conn, cap_id, "final wording") is True
+    conn.close()
+
+    db_path = tmp_path / "test.db"
+    c2 = sqlite3.connect(db_path)
+    init_schema(c2)
+    extracts = list_extracts_for_doc(c2, doc_id)
+    assert extracts[0].captures[0].text_content == "final wording"
+    c2.close()

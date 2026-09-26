@@ -17,6 +17,7 @@ class Capture:
     kind: str  # 'text' | 'image'
     text_content: Optional[str] = None  # kind='text'
     image_blob: Optional[bytes] = None  # kind='image', PNG
+    id: Optional[int] = None  # DB row id (set when read back from the store)
 
 
 @dataclass
@@ -126,7 +127,7 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     for eid, edoc, etype in extract_rows:
         cap_rows = conn.execute(
             """
-            SELECT page, rect, kind, text_content, image_blob FROM captures
+            SELECT id, page, rect, kind, text_content, image_blob FROM captures
             WHERE extract_id = ?
             ORDER BY id ASC
             """,
@@ -134,13 +135,14 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
         ).fetchall()
         captures = [
             Capture(
+                id=cap_id,
                 page=page,
                 rect=_rect_from_str(rect),
                 kind=kind,
                 text_content=text_content,
                 image_blob=image_blob,
             )
-            for page, rect, kind, text_content, image_blob in cap_rows
+            for cap_id, page, rect, kind, text_content, image_blob in cap_rows
         ]
         extracts.append(Extract(id=eid, doc_id=edoc, type=etype, captures=captures))
     return extracts
@@ -188,6 +190,22 @@ def capture_overlaps_extract(
         if x0 < cx1 and cx0 < x1 and y0 < cy1 and cy0 < y1:
             return True
     return False
+
+
+def update_capture_text(conn, capture_id: int, new_text: str) -> bool:
+    """Replace a text Capture's stored text in place (T1/#11).
+
+    Rejects a trimmed-empty edit and non-text Captures: returns False and
+    leaves the row untouched. Returns True only when the row was updated.
+    """
+    if not new_text or not new_text.strip():
+        return False
+    cur = conn.execute(
+        "UPDATE captures SET text_content = ? WHERE id = ? AND kind = 'text'",
+        (new_text, capture_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def delete_extract(conn, extract_id: int) -> None:
