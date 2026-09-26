@@ -4,12 +4,14 @@ import pytest
 
 from services.extract_store import (
     Capture,
+    Extract,
     capture_overlaps_extract,
     commit_working_set,
     delete_extract,
     init_schema,
     list_docs_with_extracts,
     list_extracts_for_doc,
+    preview_for_extract,
     resolve_doc_id,
     update_capture_text,
 )
@@ -418,3 +420,89 @@ def test_updated_text_survives_reopen(conn, tmp_path):
     extracts = list_extracts_for_doc(c2, doc_id)
     assert extracts[0].captures[0].text_content == "final wording"
     c2.close()
+
+
+def make_extract(captures, etype="text", extract_id=1):
+    return Extract(id=extract_id, doc_id=1, type=etype, captures=captures)
+
+
+def text_cap(text, page=0):
+    return Capture(page=page, rect=(0, 0, 1, 1), kind="text", text_content=text)
+
+
+def image_cap(page=0):
+    return Capture(page=page, rect=(0, 0, 1, 1), kind="image", image_blob=b"PNG")
+
+
+def test_preview_short_text_is_whole_text():
+    ex = make_extract([text_cap("The mitochondria is the powerhouse")])
+    assert preview_for_extract(ex) == "The mitochondria is the powerhouse"
+
+
+def test_preview_truncates_after_60_chars_with_ellipsis():
+    long_text = "x" * 61
+    ex = make_extract([text_cap(long_text)])
+    preview = preview_for_extract(ex)
+    assert len(preview) == 61  # 60 chars + ellipsis
+    assert preview.endswith("…")
+    assert preview.startswith("x" * 60)
+
+
+def test_preview_normalizes_whitespace_to_one_line():
+    ex = make_extract([text_cap("first line\nsecond   line\tends")])
+    assert preview_for_extract(ex) == "first line second line ends"
+
+
+def test_preview_combined_uses_first_text_not_images():
+    """Combined Extract: preview comes from the first text Capture, even
+    when images are captured before it."""
+    ex = make_extract(
+        [image_cap(page=7), text_cap("quoted insight"), image_cap(page=9)],
+        etype="combined",
+    )
+    assert preview_for_extract(ex) == "quoted insight"
+
+
+def test_preview_image_only_single_page():
+    ex = make_extract([image_cap(page=2), image_cap(page=2)], etype="image")
+    assert preview_for_extract(ex) == "p. 3"
+
+
+def test_preview_image_only_contiguous_page_range():
+    ex = make_extract([image_cap(page=3), image_cap(page=4)], etype="image")
+    assert preview_for_extract(ex) == "pp. 4–5"
+
+
+def test_preview_image_only_non_contiguous_pages_listed():
+    ex = make_extract([image_cap(page=0), image_cap(page=4)], etype="image")
+    assert preview_for_extract(ex) == "pp. 1, 5"
+
+
+def test_preview_all_empty_text_without_images_is_empty_marker():
+    ex = make_extract([text_cap("   "), text_cap("")])
+    assert preview_for_extract(ex) == "(empty)"
+
+
+def test_preview_empty_text_with_images_falls_back_to_image_pages():
+    ex = make_extract(
+        [text_cap(""), image_cap(page=5), image_cap(page=6)],
+        etype="combined",
+    )
+    assert preview_for_extract(ex) == "pp. 6–7"
+
+
+def test_preview_skips_empty_text_and_uses_next_nonempty():
+    ex = make_extract([text_cap(""), text_cap("second capture speaks")])
+    assert preview_for_extract(ex) == "second capture speaks"
+
+
+def test_preview_from_real_store_round_trip(conn):
+    """The helper works on Extracts as read back from the store."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="from the db")],
+    )
+    ex = list_extracts_for_doc(conn, doc_id)[0]
+    assert preview_for_extract(ex) == "from the db"

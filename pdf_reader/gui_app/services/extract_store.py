@@ -148,6 +148,38 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     return extracts
 
 
+_PREVIEW_LEN = 60
+
+
+def preview_for_extract(extract: Extract) -> str:
+    """One-line content preview for an Extract's row in the tree.
+
+    First non-empty text Capture, whitespace-normalised and truncated to
+    ~60 characters with an ellipsis; falls back to the image Captures' page
+    span (`p. 4`, `pp. 4–5`, `pp. 1, 5`); `(empty)` when nothing usable
+    remains. Derived at render time — never persisted.
+    """
+    texts = [
+        " ".join(c.text_content.split())
+        for c in extract.captures
+        if c.kind == "text" and c.text_content and c.text_content.strip()
+    ]
+    if texts:
+        snippet = texts[0]
+        if len(snippet) > _PREVIEW_LEN:
+            return snippet[:_PREVIEW_LEN] + "…"
+        return snippet
+
+    pages = sorted({c.page + 1 for c in extract.captures if c.kind == "image"})
+    if not pages:
+        return "(empty)"
+    if len(pages) == 1:
+        return f"p. {pages[0]}"
+    if pages == list(range(pages[0], pages[-1] + 1)):
+        return f"pp. {pages[0]}–{pages[-1]}"
+    return "pp. " + ", ".join(str(p) for p in pages)
+
+
 def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
     """(doc_id, name, path) for Documents that have at least one Extract.
 

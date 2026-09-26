@@ -28,6 +28,7 @@ from services.extract_store import (
     delete_extract,
     list_docs_with_extracts,
     list_extracts_for_doc,
+    preview_for_extract,
     update_capture_text,
 )
 
@@ -203,10 +204,13 @@ class ExtractsView(QWidget):
             doc_item.setData(0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id})
             for extract in extracts:
                 first_cap = extract.captures[0] if extract.captures else None
+                count = len(extract.captures)
+                base_label = (
+                    f"Extract #{extract.id} — {extract.type} "
+                    f"({count} capture{'s' if count != 1 else ''})"
+                )
                 ex_item = QTreeWidgetItem(
-                    [f"Extract #{extract.id} — {extract.type} "
-                     f"({len(extract.captures)} capture{'s' if len(extract.captures) != 1 else ''})",
-                     "↱ Jump"]
+                    [f"{base_label}: {preview_for_extract(extract)}", "↱ Jump"]
                 )
                 ex_item.setData(
                     0, Qt.ItemDataRole.UserRole,
