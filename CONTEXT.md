@@ -19,6 +19,7 @@ The reader-session buffer of accumulated Highlights awaiting commit. Purely tran
 
 ### Extract
 A captured working set committed with the `e` key: a persisted artifact attached to a Document and bound to source locations (page, and for future jump-back, the region). Types are `text`, `image`, or `combined` (a working set containing text and/or image). Rendered `blue` in the reader.
+_Avoid_: group, extracted group (informal speech for the same thing — one Extract, many Captures).
 
 Rendering rule: `blue` once extracted.
 
@@ -28,7 +29,11 @@ Note the shift: a Highlight *becomes* an Extract — they are the same PDF regio
 An individual snippet inside an Extract (one text region or one image region). An Extract is composed of one or more Captures taken together.
 
 ### Extracts View
-The screen where the user reviews extracted material. Shows a hierarchical list: the library's **Documents**, each expandable (`+`) into its **Extracts**. This is where a text Extract is read and edited.
+The screen where the user reviews extracted material. Shows a hierarchical list: the library's **Documents**, each expandable (`+`) into its **Extracts** (each row previewing a snippet of its content). Opening an Extract replaces the list with the **Extract Editor**; closing it returns to the list.
+
+### Extract Editor
+The full-area editing surface for one Extract: a Word-like document showing every Capture of that Extract **interleaved in capture order** — editable plain text segments and read-only images side by side. Capture boundaries are fixed (text is edited within a segment; images are immutable). Saving is implicit: leaving the Editor (Back) persists the content. Images can never be edited here — only viewed with their text.
+_Avoid_: inline editor (retired), rich text (formatting is out of scope for now).
 
 ### Un-extract
 The act of deleting an Extract from the reader (`d`) or deleting it in the Extracts View. **Irreversible** — there is no undo and no soft delete in either view. Both paths show a confirmation prompt before the delete happens.
@@ -49,6 +54,7 @@ Dismissing all pending Highlights (`Esc`) without committing anything. The Worki
 - **Yellow is never drawn over blue** — already-extracted content cannot be re-highlighted; attempting it is flagged in the UI.
 - **Editing a text Capture affects only the persisted text shown in the Extracts View.** The source PDF is never modified; page and rectangle metadata are immutable once captured.
 - **Deletion differs by surface**: in the reader, `d` twice deletes (key-driven); in the Extracts View, a confirmation popup deletes (mouse already in hand). Both are irreversible.
+- **Content and existence are independent**: the Extract Editor may empty an Extract's text (one line or all of it) without any warning — content changes are the user's choice. Only the separate, confirmed delete act removes the Extract itself.
 - **Edits in the Extracts View are undoable** (editor-session Ctrl+Z). Deletion stays irreversible; only typing is reversible.
 - Reader keymap: `e` commit Working Set, `Esc` clear Working Set, `d` delete (twice), plus existing navigation/search keys.
 
