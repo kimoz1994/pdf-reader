@@ -8,6 +8,7 @@ from services.extract_store import (
     capture_overlaps_extract,
     commit_working_set,
     delete_extract,
+    display_title,
     init_schema,
     list_docs_with_extracts,
     list_extracts_for_doc,
@@ -508,3 +509,38 @@ def test_preview_from_real_store_round_trip(conn):
     )
     ex = list_extracts_for_doc(conn, doc_id)[0]
     assert preview_for_extract(ex) == "from the db"
+
+
+def _make_pdf(path, title=None):
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page()
+    if title is not None:
+        doc.set_metadata({"title": title})
+    doc.save(str(path))
+    doc.close()
+
+
+def test_display_title_uses_pdf_metadata(tmp_path):
+    p = tmp_path / "ugly_v1_file.pdf"
+    _make_pdf(p, title="Nice Title")
+    assert display_title(str(p), p.name) == "Nice Title"
+
+
+def test_display_title_falls_back_to_cleaned_filename(tmp_path):
+    p = tmp_path / "2020-11-11_v5.0_Supermemo_lore.pdf"
+    _make_pdf(p)
+    assert display_title(str(p), p.name) == "2020-11-11 v5.0 Supermemo lore"
+
+
+def test_display_title_missing_file_cleans_name():
+    assert display_title(r"Z:\nowhere\missing_file.pdf", "missing_file.pdf") == (
+        "missing file"
+    )
+
+
+def test_display_title_whitespace_only_metadata_falls_back(tmp_path):
+    p = tmp_path / "plain.pdf"
+    _make_pdf(p, title="   ")
+    assert display_title(str(p), p.name) == "plain"

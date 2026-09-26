@@ -70,6 +70,7 @@ Mouse works too — scroll and click as usual.
 
 1. Click **📝 Extracts** in the sidebar.
 2. You'll see a tree: **Document → Extract → Captures**, newest first. Expand with `+`.
+   - Document rows show the PDF's own **title** (read from its metadata), falling back to a tidied filename (`2020-11-11_v5.0_Supermemo_lore.pdf` → `2020-11-11 v5.0 Supermemo lore`).
    - `Extract #2 — text (3 captures)` means “3 pieces captured together”.
    - Each Extract row **previews its content**: the opening of its first text (e.g. `…: The mitochondria is the powerhou…`), the page span for image-only extracts (`…: pp. 4–5`), or `(empty)` — so you know what's inside before opening it.
 3. **Fix a typo** in a saved text capture: **double-click the text capture row** (or select it and press `Enter`). An inline editor opens — type your correction, then:

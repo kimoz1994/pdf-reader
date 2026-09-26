@@ -5,7 +5,9 @@ Pure Python + sqlite3, no Qt imports — this is the single testable seam
 for the extract workflow. The GUI never touches these tables directly.
 """
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Tuple
+import os
 
 
 @dataclass
@@ -200,6 +202,45 @@ def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
         """
     ).fetchall()
     return [(r[0], r[1], r[2]) for r in rows]
+
+
+# (path -> (mtime, title)) so a refresh does not reopen every PDF.
+_title_cache: dict = {}
+
+
+def display_title(path: str, name: str) -> str:
+    """Human-readable title for a Document row: the PDF's metadata title
+    when present, else the filename cleaned up (`.pdf` stripped, `_` → space).
+
+    Falls back to the cleaned filename for missing/unreadable files.
+    Cached by (path, mtime) — a resaved PDF is re-read.
+    """
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return _clean_fallback(name)
+
+    cached = _title_cache.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    title = _clean_fallback(name)
+    try:
+        import pymupdf
+
+        with pymupdf.open(path) as doc:
+            meta_title = ((doc.metadata or {}).get("title") or "").strip()
+        if meta_title:
+            title = meta_title
+    except Exception:
+        pass
+
+    _title_cache[path] = (mtime, title)
+    return title
+
+
+def _clean_fallback(name: str) -> str:
+    return Path(name).stem.replace("_", " ")
 
 
 def capture_overlaps_extract(
