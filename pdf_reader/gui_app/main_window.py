@@ -12,7 +12,7 @@ from pathlib import Path
 from views.library_view import LibraryView
 from views.pdf_reader_view import PDFReaderView
 from views.extracts_view import ExtractsView
-from services.extract_store import init_schema
+from services.extract_store import init_schema, resolve_doc_id
 
 
 class MainWindow(QMainWindow):
@@ -349,13 +349,23 @@ class MainWindow(QMainWindow):
     def on_extract_jump(self, target: dict):
         """Jump from the Extracts View to a Capture's original region."""
         path = target.get("path")
-        if not path or not Path(path).exists():
+        conn = self.db_conn()
+        if not path or conn is None or resolve_doc_id(conn, path) is None:
+            QMessageBox.warning(
+                self,
+                "PDF Removed from Library",
+                "This Extract's PDF is no longer in the library:\n\n"
+                f"{path}\n\nRe-add it to the library to jump to the "
+                "original location.",
+            )
+            return
+        if not Path(path).exists():
             QMessageBox.warning(
                 self,
                 "PDF Not Found",
-                "The PDF for this Extract is no longer available:\n\n"
-                f"{path}\n\nRe-add it to the library to jump to the "
-                "original location.",
+                "The PDF file for this Extract is missing from disk:\n\n"
+                f"{path}\n\nRestore the file to jump to the original "
+                "location.",
             )
             return
         self.open_pdf(path)

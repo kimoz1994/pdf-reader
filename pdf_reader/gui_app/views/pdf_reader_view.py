@@ -58,6 +58,14 @@ def rect_to_qrectf(rect: tuple[float, float, float, float]) -> QRectF:
     return QRectF(x0, y0, x1 - x0, y1 - y0)
 
 
+def stroke_rect(painter, rect: QRectF, rgb: tuple, pen_width: int = 3,
+                fill_alpha: int = 80):
+    """Paint one translucent highlight rect (shared by all overlay layers)."""
+    painter.setPen(QPen(QColor(*rgb), pen_width))
+    painter.setBrush(QBrush(QColor(*rgb, fill_alpha)))
+    painter.drawRect(rect)
+
+
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -218,37 +226,22 @@ class SearchHighlightOverlay(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         # Persisted extracts: blue, underneath
-        if self.extract_rects:
-            pen = QPen(QColor(52, 152, 219), 3)
-            brush = QBrush(QColor(52, 152, 219, 80))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            for rect in self.extract_rects:
-                painter.drawRect(rect)
+        for rect in self.extract_rects:
+            stroke_rect(painter, rect, (52, 152, 219))
 
         # Working set: yellow, on top of the blue extracts
-        if self.working_rects:
-            pen = QPen(QColor(255, 255, 0), 3)
-            brush = QBrush(QColor(255, 255, 0, 80))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            for rect in self.working_rects:
-                painter.drawRect(rect)
+        for rect in self.working_rects:
+            stroke_rect(painter, rect, (255, 255, 0))
 
         if self.current_rect:
-            pen = QPen(QColor(255, 255, 0), 3)
-            brush = QBrush(QColor(255, 255, 0, 80))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            painter.drawRect(self.current_rect)
+            stroke_rect(painter, self.current_rect, (255, 255, 0))
 
         # Jump-back flash: orange, on top of everything, temporary
         if self.flash_rect:
-            pen = QPen(QColor(230, 126, 34), 4)
-            brush = QBrush(QColor(230, 126, 34, 60))
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            painter.drawRect(self.flash_rect)
+            stroke_rect(
+                painter, self.flash_rect, (230, 126, 34),
+                pen_width=4, fill_alpha=60,
+            )
 
 
 class PDFReaderView(QWidget):
@@ -275,7 +268,7 @@ class PDFReaderView(QWidget):
         self._delete_timer.setInterval(2000)
         self._delete_timer.timeout.connect(self._disarm_delete)
         # Jump-back flash state: (page_index, pdf_rect), orange outline, ~1s
-        self._flash_capture = None
+        self._flash_region = None
         self._flash_timer = QTimer(self)
         self._flash_timer.setSingleShot(True)
         self._flash_timer.setInterval(1000)
@@ -675,12 +668,12 @@ class PDFReaderView(QWidget):
         if layout is not None:
             target = center_v_scroll(layout, page_index, tuple(rect))
             self.pdf_view.verticalScrollBar().setValue(target)
-        self._flash_capture = (page_index, tuple(rect))
+        self._flash_region = (page_index, tuple(rect))
         self._flash_timer.start()
         self._refresh_highlights()
 
     def _clear_flash(self):
-        self._flash_capture = None
+        self._flash_region = None
         self._refresh_highlights()
 
     # ------------------------------------------------------------
@@ -1101,9 +1094,12 @@ class PDFReaderView(QWidget):
         self.drag_current = None
         self._delete_armed_id = None
         self._delete_timer.stop()
+        self._flash_region = None
+        self._flash_timer.stop()
         self.working_label.setText("")
         self.highlight_overlay.set_working_rects([])
         self.highlight_overlay.set_extract_rects([])
+        self.highlight_overlay.set_flash_rect(None)
 
     def _db_conn(self):
         """The shared sqlite connection MainWindow keeps open, or None."""
@@ -1176,8 +1172,8 @@ class PDFReaderView(QWidget):
                 for c in self.extract_captures
             ]
             flash = None
-            if self._flash_capture is not None:
-                flash_page, flash_rect = self._flash_capture
+            if self._flash_region is not None:
+                flash_page, flash_rect = self._flash_region
                 flash = rect_to_qrectf(
                     layout.pdf_to_widget(flash_page, flash_rect)
                 )
