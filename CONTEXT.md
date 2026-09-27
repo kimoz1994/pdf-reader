@@ -33,7 +33,7 @@ The screen where the user reviews extracted material. Shows a hierarchical list:
 
 ### Extract Editor
 The full-area editing surface for one Extract: a Word-like document showing every Capture of that Extract **interleaved in capture order** — plain text segments and read-only images side by side. Capture boundaries are fixed (text is edited within a segment; images are immutable). Images can never be edited here — only viewed with their text.
-**Status**: read-only in the current slice (ticket #24 — open, read, return); the editing behaviour below arrives with ticket #25. Saving will be implicit: leaving the Editor (Back) will persist the content.
+**Status**: editable (ticket #25 — shipped): text segments are typed into in place, word-wrapped with soft line breaks that never change the Capture count. **Save** persists mid-session; **Back** auto-saves. Emptying segments (one, several, or all) is allowed and never removes the Extract.
 _Avoid_: inline editor (retired), rich text (formatting is out of scope for now).
 
 ### Un-extract
@@ -69,3 +69,4 @@ Dismissing all pending Highlights (`Esc`) without committing anything. The Worki
 - Created at start of grilling round 3. All terms settled through round 8.
 - PR ① scope: capture flow (`e`/`Esc`/`d`-twice) + blue re-draw + Extracts View hierarchy + delete. No editing, no jump-back.
 - PR ② scope: editing (text replacement, editor undo) + jump-back (routed through MainWindow).
+- Superseded by spec #22, which shipped as issues #23 (previews), #24 (editor read), #25 (editor editing); reader back-nav landed separately (#28). Old PR-②-era issues (#10, #13, #14, #15, #19, #21) are closed as superseded.

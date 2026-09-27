@@ -8,11 +8,11 @@ It helps people who read PDFs for learning — course materials, papers, and tec
 
 ## Demo
 
-*Work in progress — screenshots will be added once the full extract workflow lands.*
+*Work in progress — screenshots are pending.*
 
 The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
 
-The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Select an Extract — or any capture inside it — and press `Enter` (or double-click) to open the full-area **Extract Editor**, which shows the whole group as one page-marked, read-only document (`← Back` returns to the tree). **↱ Jump** (click) reopens the reader centered on the original region with a brief orange flash.
+The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Select an Extract — or any capture inside it — and press `Enter` (or double-click) to open the full-area **Extract Editor**, which shows the whole group as one page-marked document you can type into (**💾 Save** persists mid-session; `← Back` auto-saves and returns to the tree). **↱ Jump** (click) reopens the reader centered on the original region with a brief orange flash.
 
 ## Problem
 
@@ -35,7 +35,7 @@ cd pdf_reader/gui_app
 $env:PYTHONNOUSERSITE="1"; & "D:\volume\tempprograms\anaconda\envs\pdf-reader-clean\Scripts\pytest.exe" tests/
 ```
 
-Deps: `pytest` is in `requirements-dev.txt`. The GUI itself (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen, click an image → yellow → `e` → blue, `d`-twice deletes, the Extracts view lists/deletes, `Enter` opens the read-only Extract Editor, and ↱ Jump reopens the reader centered on the region.
+Deps: `pytest` is in `requirements-dev.txt`. The GUI itself (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen, click an image → yellow → `e` → blue, `d`-twice deletes, the Extracts view lists/deletes, `Enter` opens the Extract Editor (type, Save, Back auto-saves), and ↱ Jump reopens the reader centered on the region.
 
 ## Monitoring
 
@@ -87,7 +87,7 @@ MainWindow
 │  (sidebar + view stack)
 ├── LibraryView       lists documents, opens a PDF
 ├── PdfReaderView     QPdfView-based reader (keys, search, page progress, extraction)
-├── ExtractsView      Documents → Extracts → Captures review + delete
+├── ExtractsView      Documents → Extracts → Captures review + edit + delete
 └── FlashcardsView    placeholder
 
 services/             engine modules (element detection, PDF loading, hints)
@@ -120,7 +120,7 @@ pdf_reader/
 │   │   └── views/
 │   │       ├── library_view.py
 │   │       ├── pdf_reader_view.py   the core reader
-│   │       ├── extracts_view.py     Documents → Extracts → Captures + delete
+│   │       ├── extracts_view.py     Documents → Extracts → Captures + edit + delete
 │   │       └── flashcards_view.py   placeholder
 │   └── pdfs/test.pdf         sample document
 ```
@@ -140,19 +140,17 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 - The GUI view (`pdf_reader_view.py`) has no automated tests — drag→`e`→blue, image click-capture, and `d`-twice delete are verified manually; only the headless seams are pytest-covered.
 - The hint system (`services/hint_overlay.py`, `hint_generator.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
-- The Extract Editor is read-only until #25 (typing); the old inline row editor is unreachable — see Future work.
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
 - No packaging/installer yet; requires a Python environment.
 
 ## Future work
 
-1. **Editing** inside the Extract Editor (#25).
-2. Flashcard review from extracts.
-3. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
+1. Flashcard review from extracts.
+2. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation
 
-This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, full capture workflow shipped (drag/click → `e` → blue, `d`-twice delete, Extracts view, Extract Editor (read mode), jump-back with centering flash); testing — headless seams pytest-covered, GUI verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
+This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, full capture workflow shipped (drag/click → `e` → blue, `d`-twice delete, Extracts view, Extract Editor with read + edit, jump-back with centering flash); testing — headless seams pytest-covered, GUI verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
 
 ---
 
