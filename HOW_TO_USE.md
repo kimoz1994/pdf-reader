@@ -14,7 +14,7 @@ You'll see three buttons on the left: **📖 Library**, **📝 Extracts**, **�
 
 ## The idea in one paragraph
 
-While you read, interesting bits are marked **yellow** (pending). Press `e` and they become **blue** — permanent *Extracts* stored in your library, grouped exactly as you selected them. You can review, fix, and jump back to them any time, even after restarting the app.
+While you read, interesting bits are marked **yellow** (pending). Press `e` and they become **blue** — permanent *Extracts* stored in your library, grouped exactly as you selected them. You can review, read, and jump back to them any time, even after restarting the app.
 
 ---
 

@@ -140,7 +140,7 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 - The GUI view (`pdf_reader_view.py`) has no automated tests — drag→`e`→blue, image click-capture, and `d`-twice delete are verified manually; only the headless seams are pytest-covered.
 - The hint system (`services/hint_overlay.py`, `hint_generator.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
-- Extract editing is still row-level (a full-area group editor is in progress — see Future work).
+- The Extract Editor is read-only until #25 (typing); the old inline row editor is unreachable — see Future work.
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
 - No packaging/installer yet; requires a Python environment.
 

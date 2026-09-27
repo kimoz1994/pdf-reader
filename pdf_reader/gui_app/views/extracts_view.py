@@ -3,7 +3,9 @@ Extracts View — browse captured material.
 
 Shows the library's Documents, each expandable into its Extracts
 (newest-first), and each Extract into its Captures (text or image).
-Deleting an Extract removes it and its Captures after confirmation.
+Activating a row swaps the tree for the full-area Extract Editor
+(read-only document page with Back). Deleting an Extract removes it
+and its Captures after confirmation.
 All data comes from the headless persistence seam (`services.extract_store`).
 """
 from pathlib import Path
@@ -178,8 +180,10 @@ class ExtractsView(QWidget):
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.itemActivated.connect(self._on_item_activated)
 
-        # Editing is driven explicitly by itemActivated, never by
-        # Qt's default edit triggers, so single-click never opens an editor.
+        # No Qt edit triggers: single-click must only select, and
+        # Enter/double-click is owned by _on_item_activated (which opens
+        # the Extract Editor). The delegate below serves the dormant
+        # inline-edit path until #25 retires it.
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._capture_delegate = _CaptureTextDelegate(self)
         self.tree.setItemDelegateForColumn(0, self._capture_delegate)
@@ -187,6 +191,7 @@ class ExtractsView(QWidget):
         self._build_editor_page(layout)
         self._return_item = None
         self._return_expanded = []
+        self._editor_open = False
 
         self.setLayout(layout)
         self.refresh()
@@ -249,6 +254,16 @@ class ExtractsView(QWidget):
 
     def refresh(self):
         """Reload the Document -> Extract -> Capture hierarchy."""
+        if self._editor_open:
+            # Re-entering via the sidebar refreshes the view while the
+            # editor is open; close first so Back never targets tree
+            # items that clear() is about to destroy. State-based, not
+            # isVisible(): the page can be hidden under the stack while
+            # the editor is open (e.g. after a Jump to the reader).
+            self._close_editor()
+        # Belt: these item refs die with the clear below no matter what.
+        self._return_item = None
+        self._return_expanded = []
         self._edit_item = None
         self.tree.clear()
         conn = self._db_conn()
@@ -302,7 +317,8 @@ class ExtractsView(QWidget):
                         cap_item = QTreeWidgetItem(
                             [_cap_label(cap.page, cap.text_content or "")]
                         )
-                        # Text Captures are editable; image rows are not.
+                        # Text rows keep the editable flag for the dormant
+                        # inline-edit path (#25); image rows never edit.
                         cap_item.setFlags(cap_item.flags() | Qt.ItemFlag.ItemIsEditable)
                     cap_item.setData(
                         0, Qt.ItemDataRole.UserRole,
@@ -392,6 +408,7 @@ class ExtractsView(QWidget):
         self.empty_label.hide()
         self.tree.hide()
         self.editor_page.show()
+        self._editor_open = True
         self.editor_scroll.verticalScrollBar().setValue(0)
         self.back_btn.setFocus()
 
@@ -453,6 +470,7 @@ class ExtractsView(QWidget):
             self.tree.scrollToItem(self._return_item)
         self._return_item = None
         self._return_expanded = []
+        self._editor_open = False
         self.tree.setFocus()
 
     def _begin_capture_edit(self, item):
