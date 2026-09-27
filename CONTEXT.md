@@ -32,7 +32,8 @@ An individual snippet inside an Extract (one text region or one image region). A
 The screen where the user reviews extracted material. Shows a hierarchical list: the library's **Documents**, each expandable (`+`) into its **Extracts** (each row previewing a snippet of its content). Opening an Extract replaces the list with the **Extract Editor**; closing it returns to the list.
 
 ### Extract Editor
-The full-area editing surface for one Extract: a Word-like document showing every Capture of that Extract **interleaved in capture order** — editable plain text segments and read-only images side by side. Capture boundaries are fixed (text is edited within a segment; images are immutable). Saving is implicit: leaving the Editor (Back) persists the content. Images can never be edited here — only viewed with their text.
+The full-area editing surface for one Extract: a Word-like document showing every Capture of that Extract **interleaved in capture order** — plain text segments and read-only images side by side. Capture boundaries are fixed (text is edited within a segment; images are immutable). Images can never be edited here — only viewed with their text.
+**Status**: read-only in the current slice (ticket #24 — open, read, return); the editing behaviour below arrives with ticket #25. Saving will be implicit: leaving the Editor (Back) will persist the content.
 _Avoid_: inline editor (retired), rich text (formatting is out of scope for now).
 
 ### Un-extract
