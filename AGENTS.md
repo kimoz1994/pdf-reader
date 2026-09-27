@@ -35,7 +35,7 @@ $env:PYTHONNOUSERSITE="1"; & "D:\volume\tempprograms\anaconda\envs\pdf-reader-cl
 
 ## Structure
 - `gui_app/main.py` — entry point. `main_window.py` holds `MainWindow` (sidebar + view stack).
-- `gui_app/views/` — screens: `library_view.py`, `pdf_reader_view.py` (core reader), `extracts_view.py` (Document→Extract→Capture review + delete), plus `flashcards_view.py` placeholder.
+- `gui_app/views/` — screens: `library_view.py`, `pdf_reader_view.py` (core reader), `extracts_view.py` (Document→Extract→Capture review + edit + delete; the full-area Extract Editor), plus `flashcards_view.py` placeholder.
 - `gui_app/services/` — headless seams `extract_store.py` (extract/capture SQL, no Qt) and `pdf_geometry.py` (Qt-mirroring layout math); plus dormant modules `search_engine.py`, `hint_overlay.py`, and relocated engine modules (`element_detector.py`, `pdf_loader.py`, `hint_generator.py`).
 - `gui_app/tests/` — pytest suite for the two seams (flat imports via `conftest.py`).
 
@@ -44,7 +44,7 @@ $env:PYTHONNOUSERSITE="1"; & "D:\volume\tempprograms\anaconda\envs\pdf-reader-cl
 - `services/` files use package-relative imports (`from .element_detector ...`); it has an `__init__.py`. If you activate them, import via the package, not as scripts. (`extract_store.py` and `pdf_geometry.py` are flat — imported as `services.extract_store` from the app/tests.)
 - `gui_app/library.db` (per-file read progress) and `__pycache__/` are gitignored.
 - `gui_app/views/pdf_reader_view.py:26-28` inserts the repo root into `sys.path` — cargo-culted; not actively required by anything.
-- Extracts schema: `extracts(id, doc_id, created_at, type)` + `captures(id, extract_id, page, rect 'x0,y0,x1,y1', kind, text_content, image_blob)`. The reader draws persisted extracts blue on load and keeps a transient yellow Working Set; commiting (`e`) turns the Working Set into one Extract row; `d`-twice deletes the newest Extract on the current page; the Extracts View (Document→Extract→Capture) reviews and deletes with a confirmation popup. `capture_overlaps_extract` / `delete_extract` live in the seam. `init_schema` is idempotent — called once by the reader's DB helper on first use.
+- Extracts schema: `extracts(id, doc_id, created_at, type)` + `captures(id, extract_id, page, rect 'x0,y0,x1,y1', kind, text_content, image_blob)`. The reader draws persisted extracts blue on load and keeps a transient yellow Working Set; commiting (`e`) turns the Working Set into one Extract row; `d`-twice deletes the newest Extract on the current page; the Extracts View (Document→Extract→Capture) reviews and edits (the full-area Extract Editor: text blocks are QPlainTextEdit, 💾 Save + Back auto-save through `save_extract_texts`, empties allowed) and deletes with a confirmation popup. `capture_overlaps_extract` / `delete_extract` / `save_extract_texts` live in the seam. `init_schema` is idempotent — called once by the reader's DB helper on first use.
 
 ## Skills
 - Project-local skills live in `.opencode/skills/` (one subfolder per skill, each with a `SKILL.md`). This folder is gitignored (personal, not app files). A restart of the opencode session is required to pick up new/edited skills.
@@ -62,4 +62,4 @@ Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agent
 - **Commit and push after every change** — the user does not want to be reminded. Feature work goes on feature branches → PR → review → merge to `master`. Doc-only changes go straight to `master`, and `AGENTS.md` itself is edited directly on `master` (self-referential doc).
 - Repo `origin` is `https://github.com/kimoz1994/pdf-reader.git`. Current branch: `master` (no remote branch protection yet).
 - **Live documents to keep updated**: `README.md` (repo root, follows the aishippingblog 16-section guide; not all sections apply — mark gaps honestly), `HOW_TO_USE.md` (repo root — user-facing, example-driven feature guide; whenever a feature ships, document it there and clear it from the "Not available yet" list), `pdf_reader/README.md` (short pointer to root README), and `CONTEXT.md` (domain glossary — updated during design/grilling, not a spec). Docs are not deferred to a ticket: keep them true at every merge.
-- Planned work stream: extract workflow — PR ① capture flow (`e`/`Esc`/`d`-twice) + blue re-draw + Extracts hierarchy + delete; PR ② editing + jump-back.
+- Extract workflow **shipped** (spec #22, closed): capture flow (`e`/`Esc`/`d`-twice) + blue re-draw + Extracts hierarchy + delete (PR ① era, #18), row previews (#23), Extract Editor read (#24) + editing (#25), reader back-nav (#28, superseding #13). Next open backlog: #17 (orphaned extracts), flashcards, packaging.
