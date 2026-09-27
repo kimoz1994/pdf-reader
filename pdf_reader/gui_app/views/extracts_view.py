@@ -5,7 +5,7 @@ Shows the library's Documents, each expandable into its Extracts
 (newest-first), and each Extract into its Captures (text or image).
 Activating a row swaps the tree for the full-area Extract Editor:
 a Word-like document of page-marked blocks where text segments are
-editable in place (Save button and Back auto-save persist the group;
+editable in place (Save button and Back auto-save persist the Extract;
 images are protected), with Back returning to the exact tree row.
 Deleting an Extract removes it and its Captures after confirmation.
 All data comes from the headless persistence seam (`services.extract_store`).
@@ -83,7 +83,6 @@ class _TextBlockEdit(QPlainTextEdit):
             }
             """
         )
-        # Connected last: the initial text must not mark the editor dirty.
         self.textChanged.connect(self._sync_height)
 
     def resizeEvent(self, event):

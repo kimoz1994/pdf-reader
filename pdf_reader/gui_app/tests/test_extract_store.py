@@ -371,7 +371,7 @@ def test_save_extract_texts_replaces_group_text(conn):
 
     assert (
         save_extract_texts(
-            conn, extract_id, {cap_ids[0]: "after", cap_ids[1]: "second"}
+            conn, extract_id, {cap_ids[0]: "after\nsecond line", cap_ids[1]: "second"}
         )
         is True
     )
@@ -379,8 +379,10 @@ def test_save_extract_texts_replaces_group_text(conn):
     extracts = list_extracts_for_doc(conn, doc_id)
     assert extracts[0].id == extract_id
     caps = extracts[0].captures
-    assert [c.text_content for c in caps] == ["after", "second"]
-    # Geometry untouched: capture count, pages and rects never change (AC).
+    assert [c.text_content for c in caps] == ["after\nsecond line", "second"]
+    # Geometry untouched even with hard line breaks: capture count, pages
+    # and rects never change (AC — soft wraps in the editor never reach
+    # the store as structure).
     assert [(c.page, c.rect) for c in caps] == [(0, (0, 0, 1, 1)), (1, (2, 2, 3, 3))]
 
 

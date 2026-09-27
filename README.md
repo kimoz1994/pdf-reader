@@ -8,7 +8,7 @@ It helps people who read PDFs for learning — course materials, papers, and tec
 
 ## Demo
 
-*Work in progress — screenshots will be added once the full extract workflow lands.*
+*Work in progress — screenshots are pending.*
 
 The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
 
@@ -87,7 +87,7 @@ MainWindow
 │  (sidebar + view stack)
 ├── LibraryView       lists documents, opens a PDF
 ├── PdfReaderView     QPdfView-based reader (keys, search, page progress, extraction)
-├── ExtractsView      Documents → Extracts → Captures review + delete
+├── ExtractsView      Documents → Extracts → Captures review + edit + delete
 └── FlashcardsView    placeholder
 
 services/             engine modules (element detection, PDF loading, hints)
@@ -120,7 +120,7 @@ pdf_reader/
 │   │   └── views/
 │   │       ├── library_view.py
 │   │       ├── pdf_reader_view.py   the core reader
-│   │       ├── extracts_view.py     Documents → Extracts → Captures + delete
+│   │       ├── extracts_view.py     Documents → Extracts → Captures + edit + delete
 │   │       └── flashcards_view.py   placeholder
 │   └── pdfs/test.pdf         sample document
 ```

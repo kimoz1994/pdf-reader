@@ -73,7 +73,7 @@ Mouse works too — scroll and click as usual.
    - Document rows show the PDF's own **title** (read from its metadata), falling back to a tidied filename (`2020-11-11_v5.0_Supermemo_lore.pdf` → `2020-11-11 v5.0 Supermemo lore`).
    - `Extract #2 — text (3 captures)` means “3 pieces captured together”.
    - Each Extract row **previews its content**: the opening of its first text (e.g. `…: The mitochondria is the powerhou…`), the page span for image-only extracts (`…: pp. 4–5`), or `(empty)` — so you know what's inside before opening it.
-3. **Read and edit an Extract full-page**: select an Extract row — or any Capture inside it — and press **Enter** (or double-click). The whole view becomes the **Extract Editor**: the group's text and images as one document, one block per capture, each marked with its page. Type directly into the text blocks — they word-wrap without ever changing how many captures the Extract has, and images are fixed (view-only). Click **💾 Save** to persist without leaving, or just press **← Back**: it auto-saves and returns you to the tree with the same row still selected, the preview showing your edited text (or `(empty)` if you emptied it). You can even empty whole segments — the Extract stays in the tree.
+3. **Read and edit an Extract full-page**: select an Extract row — or any Capture inside it — and press **Enter** (or double-click). The whole view becomes the **Extract Editor**: the group's text and images as one document, one block per capture, each marked with its page. Type directly into the text blocks — they word-wrap without ever changing how many captures the Extract has, `Ctrl+Z` undoes typing, and images are fixed (view-only). Click **💾 Save** to persist without leaving, or just press **← Back**: it auto-saves and returns you to the tree with the same row still selected, the preview showing your edited text (or `(empty)` if you emptied it). You can even empty whole segments — the Extract stays in the tree.
 4. **Delete an Extract**: select it and click **🗑️ Delete Selected** (you'll be asked to confirm). In the reader, the shortcut is **`d` twice**.
 
 ### 5. Jump back to where it came from
@@ -103,6 +103,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Reader | Delete newest Extract on this page | `d` `d` |
 | Reader | Navigate / search / zoom | `j` `k` `gg` `G` `Space` `/` `+` `-` |
 | Extracts view | Read / edit an Extract | select row → `Enter` / double-click → type → **💾 Save** / **← Back** |
+| Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
 | Extracts view | Delete an Extract | select → 🗑️ Delete Selected (confirm) |
 | Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
