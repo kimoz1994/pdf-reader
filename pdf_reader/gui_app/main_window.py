@@ -382,8 +382,8 @@ class MainWindow(QMainWindow):
             self.pdf_view.focus_region(page, tuple(rect))
     
     def go_back_from_reader(self):
-        """Back from the reader returns to whichever view it was entered
-        from: the Extracts View after a jump, the Library otherwise."""
+        """Back from the reader: to the Extracts View when the reader was
+        entered via a jump from there, to the Library otherwise."""
         if self._reader_return_view is self.extracts_view:
             self.show_extracts()
         else:

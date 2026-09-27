@@ -101,7 +101,7 @@ def main():
         after_scroll_view = win.pdf_view.last_visible_page
         after_scroll_db = db_page()
 
-        win.go_to_library()
+        win.show_library()
         pump()
         in_library_db = db_page()
 

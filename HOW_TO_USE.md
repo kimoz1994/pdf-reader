@@ -84,7 +84,7 @@ Ever forget where a highlight came from? In the Extracts view, click **↱ Jump*
 - scrolls so the original region is **centered**, and
 - an **orange outline flashes** on it for a second so your eye catches it.
 
-Your read progress is untouched. The reader's **← Back** button then takes you to whichever view you came from — the **Extracts list** after a jump, the **Library** when you opened the PDF from there.
+Your read progress is untouched. The reader's **◀ Back** button then takes you to whichever view you came from — the **Extracts list** after a jump, the **Library** when you opened the PDF from there.
 
 ### 6. Close and come back later
 
