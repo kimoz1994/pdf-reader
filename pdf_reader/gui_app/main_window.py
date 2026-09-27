@@ -58,10 +58,12 @@ class MainWindow(QMainWindow):
         
         # Track current PDF
         self.current_pdf_path = None
+        # View the reader was last entered from (for the Back button)
+        self._reader_return_view = None
         
         # Connect signals
         self.library_view.pdf_selected.connect(self.open_pdf)
-        self.pdf_view.back_requested.connect(self.go_to_library)
+        self.pdf_view.back_requested.connect(self.go_back_from_reader)
         self.pdf_view.progress_changed.connect(self.on_progress_changed)
         self.pdf_view.progress_changed.connect( self.library_view.update_progress)
         self.extracts_view.jump_requested.connect(self.on_extract_jump)
@@ -232,6 +234,11 @@ class MainWindow(QMainWindow):
 
     def show_pdf_view(self):
         """Show a PDF view"""
+        # Arm the Back target: remember which view we are leaving, but
+        # never overwrite an existing arm with the reader itself
+        # (re-showing the reader keeps the original origin).
+        if self.stacked_widget.currentWidget() is not self.pdf_view:
+            self._reader_return_view = self.stacked_widget.currentWidget()
         self.stacked_widget.setCurrentWidget(self.pdf_view)
         self.pdf_view.reload_extract_captures()
         self.pdf_view.setFocus()
@@ -374,9 +381,13 @@ class MainWindow(QMainWindow):
         if page is not None and rect:
             self.pdf_view.focus_region(page, tuple(rect))
     
-    def go_to_library(self):
-        """Go back to library"""
-        self.show_library()
+    def go_back_from_reader(self):
+        """Back from the reader returns to whichever view it was entered
+        from: the Extracts View after a jump, the Library otherwise."""
+        if self._reader_return_view is self.extracts_view:
+            self.show_extracts()
+        else:
+            self.show_library()
     
     def on_progress_changed(self, pdf_path: str, page: int):
         """Update progress in library"""

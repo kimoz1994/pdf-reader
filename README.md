@@ -146,7 +146,7 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Future work
 
-1. **Editing** inside the Extract Editor (#25); round-trip return from jump (#13).
+1. **Editing** inside the Extract Editor (#25).
 2. Flashcard review from extracts.
 3. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 

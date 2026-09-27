@@ -84,7 +84,7 @@ Ever forget where a highlight came from? In the Extracts view, click **↱ Jump*
 - scrolls so the original region is **centered**, and
 - an **orange outline flashes** on it for a second so your eye catches it.
 
-Your read progress is untouched.
+Your read progress is untouched. The reader's **← Back** button then takes you to whichever view you came from — the **Extracts list** after a jump, the **Library** when you opened the PDF from there.
 
 ### 6. Close and come back later
 
@@ -114,7 +114,6 @@ Everything — your library, your read position, your blue extracts — lives in
 These are designed and queued — don't look for them in the app today:
 
 - **Editing in the Extract Editor** — reading mode has shipped; typing (including the old typo-fix flow, whose inline row editor is now retired) arrives with ticket #25
-- **Round-trip back** from a jumped-to region to the Extract list (#13)
 - **Per-capture jump rows** (#14)
 - **Flashcards** (sidebar button says “coming soon”)
 - **Extracts when the source PDF is removed** — they're safe in the database, but hidden from the list until #17 is fixed
