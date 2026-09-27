@@ -14,7 +14,7 @@ from services.extract_store import (
     list_extracts_for_doc,
     preview_for_extract,
     resolve_doc_id,
-    update_capture_text,
+    save_extract_texts,
 )
 
 
@@ -346,7 +346,18 @@ def test_list_extracts_includes_capture_ids(conn):
     assert caps[0].id != caps[1].id
 
 
-def test_update_capture_text_replaces_text(conn):
+def _capture_ids(conn, extract_id):
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM captures WHERE extract_id = ? ORDER BY id",
+            (extract_id,),
+        )
+    ]
+
+
+def test_save_extract_texts_replaces_group_text(conn):
+    """One group-save call replaces several segments of the same Extract."""
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
@@ -356,63 +367,140 @@ def test_update_capture_text_replaces_text(conn):
             Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="other"),
         ],
     )
-    cap_id = first_capture_id(conn)
+    cap_ids = _capture_ids(conn, extract_id)
 
-    assert update_capture_text(conn, cap_id, "after") is True
+    assert (
+        save_extract_texts(
+            conn, extract_id, {cap_ids[0]: "after", cap_ids[1]: "second"}
+        )
+        is True
+    )
 
     extracts = list_extracts_for_doc(conn, doc_id)
     assert extracts[0].id == extract_id
-    assert extracts[0].captures[0].text_content == "after"
-    assert extracts[0].captures[1].text_content == "other"
-    # Geometry untouched: only text_content changes
-    assert extracts[0].captures[0].rect == (0, 0, 1, 1)
+    caps = extracts[0].captures
+    assert [c.text_content for c in caps] == ["after", "second"]
+    # Geometry untouched: capture count, pages and rects never change (AC).
+    assert [(c.page, c.rect) for c in caps] == [(0, (0, 0, 1, 1)), (1, (2, 2, 3, 3))]
 
 
-def test_update_capture_text_rejects_empty_and_whitespace(conn):
-    """A trimmed-empty edit is rejected and leaves stored text untouched."""
+def test_save_extract_texts_allows_empty_segments(conn):
+    """Amended store rule: empty and whitespace-only segments save fine —
+    content and existence are independent (the trimmed-empty rejection
+    from the inline-edit era is gone)."""
     doc_id = seed_pdf(conn)
-    commit_working_set(
-        conn, doc_id, [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="keep me")]
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="keep me")],
     )
     cap_id = first_capture_id(conn)
 
-    assert update_capture_text(conn, cap_id, "") is False
-    assert update_capture_text(conn, cap_id, "   \n\t ") is False
+    assert save_extract_texts(conn, extract_id, {cap_id: ""}) is True
+    assert save_extract_texts(conn, extract_id, {cap_id: "   \n\t "}) is True
     assert (
         conn.execute(
             "SELECT text_content FROM captures WHERE id = ?", (cap_id,)
         ).fetchone()[0]
-        == "keep me"
+        == "   \n\t "
+    )
+    # The Extract itself never disappears from a content edit.
+    assert [e.id for e in list_extracts_for_doc(conn, doc_id)] == [extract_id]
+
+
+def test_save_extract_texts_all_empty_keeps_extract_and_captures(conn):
+    """Emptying every segment leaves the Extract row and all Captures."""
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="one"),
+            Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="two"),
+        ],
+    )
+    cap_ids = _capture_ids(conn, extract_id)
+
+    assert save_extract_texts(conn, extract_id, {cid: "" for cid in cap_ids}) is True
+
+    extracts = list_extracts_for_doc(conn, doc_id)
+    assert len(extracts) == 1
+    assert len(extracts[0].captures) == 2
+    assert all(c.text_content == "" for c in extracts[0].captures)
+
+
+def test_save_extract_texts_leaves_other_extracts_untouched(conn):
+    doc_id = seed_pdf(conn)
+    keep_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="untouched")],
+    )
+    edit_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=1, rect=(9, 9, 10, 10), kind="text", text_content="old")],
+    )
+    edit_cap = _capture_ids(conn, edit_id)[0]
+
+    assert save_extract_texts(conn, edit_id, {edit_cap: "new"}) is True
+
+    extracts = {e.id: e for e in list_extracts_for_doc(conn, doc_id)}
+    assert set(extracts) == {keep_id, edit_id}
+    assert extracts[keep_id].captures[0].text_content == "untouched"
+    assert extracts[edit_id].captures[0].text_content == "new"
+
+
+def test_save_extract_texts_ignores_image_and_foreign_captures(conn):
+    """Image Captures and captures of other Extracts never change."""
+    doc_id = seed_pdf(conn)
+    other_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(1, 1, 2, 2), kind="text", text_content="other extract")],
+    )
+    edit_id = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG"),
+            Capture(page=1, rect=(3, 3, 4, 4), kind="text", text_content="mine"),
+        ],
+    )
+    image_id, mine_id = _capture_ids(conn, edit_id)
+    foreign_id = _capture_ids(conn, other_id)[0]
+
+    assert (
+        save_extract_texts(
+            conn,
+            edit_id,
+            {image_id: "nope", mine_id: "edited", foreign_id: "tampered"},
+        )
+        is True
     )
 
+    extracts = {e.id: e for e in list_extracts_for_doc(conn, doc_id)}
+    edit_caps = extracts[edit_id].captures
+    assert edit_caps[0].text_content is None
+    assert edit_caps[0].image_blob == b"PNG"
+    assert edit_caps[1].text_content == "edited"
+    assert extracts[other_id].captures[0].text_content == "other extract"
 
-def test_update_capture_text_rejects_image_capture(conn):
-    """Image Captures have no editable text — store refuses even with an id."""
+
+def test_save_extract_texts_unknown_extract_returns_false(conn):
+    assert save_extract_texts(conn, 9999, {1: "anything"}) is False
+
+
+def test_save_extract_texts_survives_reopen(conn, tmp_path):
+    """Group-saved text persists across an app restart (store-seam AC)."""
     doc_id = seed_pdf(conn)
-    commit_working_set(
-        conn, doc_id, [Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG")]
-    )
-    cap_id = first_capture_id(conn, kind="image")
-
-    assert update_capture_text(conn, cap_id, "not allowed") is False
-    row = conn.execute(
-        "SELECT text_content, image_blob FROM captures WHERE id = ?", (cap_id,)
-    ).fetchone()
-    assert row == (None, b"PNG")
-
-
-def test_update_capture_text_unknown_id_returns_false(conn):
-    assert update_capture_text(conn, 9999, "anything") is False
-
-
-def test_updated_text_survives_reopen(conn, tmp_path):
-    """The edited text persists across an app restart (store-seam AC)."""
-    doc_id = seed_pdf(conn)
-    commit_working_set(
-        conn, doc_id, [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="draft")]
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="draft")],
     )
     cap_id = first_capture_id(conn)
-    assert update_capture_text(conn, cap_id, "final wording") is True
+    assert save_extract_texts(conn, extract_id, {cap_id: "final wording"}) is True
     conn.close()
 
     db_path = tmp_path / "test.db"

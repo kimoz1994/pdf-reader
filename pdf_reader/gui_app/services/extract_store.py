@@ -269,20 +269,28 @@ def capture_overlaps_extract(
     return False
 
 
-def update_capture_text(conn, capture_id: int, new_text: str) -> bool:
-    """Replace a text Capture's stored text in place.
+def save_extract_texts(conn, extract_id: int, texts: dict) -> bool:
+    """Persist edited text for one Extract's text Captures in one call.
 
-    Rejects a trimmed-empty edit and non-text Captures: returns False and
-    leaves the row untouched. Returns True only when the row was updated.
+    `texts` maps capture id -> new text. Empty and whitespace-only values
+    are allowed: content and existence are independent, so segments may be
+    emptied (one, several, or all) without the Extract disappearing.
+    Image Captures and captures belonging to other Extracts are never
+    touched. Returns False only when the Extract itself does not exist.
     """
-    if not new_text or not new_text.strip():
+    exists = conn.execute(
+        "SELECT 1 FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()
+    if exists is None:
         return False
-    cur = conn.execute(
-        "UPDATE captures SET text_content = ? WHERE id = ? AND kind = 'text'",
-        (new_text, capture_id),
-    )
+    for capture_id, text in texts.items():
+        conn.execute(
+            "UPDATE captures SET text_content = ? "
+            "WHERE id = ? AND extract_id = ? AND kind = 'text'",
+            (text, capture_id, extract_id),
+        )
     conn.commit()
-    return cur.rowcount > 0
+    return True
 
 
 def delete_extract(conn, extract_id: int) -> None:
