@@ -3,9 +3,11 @@ Extracts View — browse captured material.
 
 Shows the library's Documents, each expandable into its Extracts
 (newest-first), and each Extract into its Captures (text or image).
-Activating a row swaps the tree for the full-area Extract Editor
-(read-only document page with Back). Deleting an Extract removes it
-and its Captures after confirmation.
+Activating a row swaps the tree for the full-area Extract Editor:
+a Word-like document of page-marked blocks where text segments are
+editable in place (Save button and Back auto-save persist the group;
+images are protected), with Back returning to the exact tree row.
+Deleting an Extract removes it and its Captures after confirmation.
 All data comes from the headless persistence seam (`services.extract_store`).
 """
 from pathlib import Path
@@ -20,14 +22,14 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QMessageBox,
     QAbstractItemView,
-    QAbstractItemDelegate,
-    QStyledItemDelegate,
     QHeaderView,
     QScrollArea,
     QFrame,
+    QPlainTextEdit,
+    QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QEvent, QItemSelectionModel, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPixmap
+from PyQt6.QtCore import Qt, QItemSelectionModel, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QPixmap, QTextOption
 
 from services.extract_store import (
     delete_extract,
@@ -35,7 +37,7 @@ from services.extract_store import (
     list_docs_with_extracts,
     list_extracts_for_doc,
     preview_for_extract,
-    update_capture_text,
+    save_extract_texts,
 )
 
 
@@ -44,52 +46,56 @@ def _cap_label(page: int, text: str) -> str:
     return f"🔤 Page {page + 1}: {text}"
 
 
-class _CaptureTextDelegate(QStyledItemDelegate):
-    """Inline editor for text Captures.
+def _extract_label(extract) -> str:
+    """Tree row label: identity + live content preview."""
+    count = len(extract.captures)
+    base = (
+        f"Extract #{extract.id} — {extract.type} "
+        f"({count} capture{'s' if count != 1 else ''})"
+    )
+    return f"{base}: {preview_for_extract(extract)}"
 
-    Enter and focus-out save, Esc cancels — handled explicitly so the
-    semantics do not depend on Qt's default edit-trigger behaviour.
+
+class _TextBlockEdit(QPlainTextEdit):
+    """Editable text segment inside the Extract Editor.
+
+    Word-wraps only — soft line breaks never add or remove Captures —
+    and grows its height to fit the wrapped document, so short segments
+    stay one compact line while long ones expand like Word paragraphs.
     """
 
-    def __init__(self, view):
-        super().__init__(view)
-        self._view = view
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.setObjectName("cap_text")
+        self.document().setDocumentMargin(4)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapMode.WordWrap)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet(
+            """
+            QPlainTextEdit {
+                background: transparent;
+                border: none;
+                color: #1a1a1a;
+                font-size: 15px;
+            }
+            """
+        )
+        # Connected last: the initial text must not mark the editor dirty.
+        self.textChanged.connect(self._sync_height)
 
-    def createEditor(self, parent, option, index):
-        editor = super().createEditor(parent, option, index)
-        editor.installEventFilter(self)
-        return editor
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_height()
 
-    def setEditorData(self, editor, index):
-        data = self._view._edit_item_data()
-        editor.setText((data or {}).get("text", ""))
-
-    def setModelData(self, editor, model, index):
-        self._view._apply_capture_edit(editor.text())
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.KeyPress and event.key() in (
-            Qt.Key.Key_Return,
-            Qt.Key.Key_Enter,
-        ):
-            self.setModelData(obj, None, None)
-            self._close_editor(obj, QAbstractItemDelegate.EndEditHint.NoHint)
-            return True
-        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
-            self._close_editor(obj, QAbstractItemDelegate.EndEditHint.RevertModelCache)
-            return True
-        if event.type() == QEvent.Type.FocusOut:
-            if obj.property("_edit_done"):
-                return True
-            self.setModelData(obj, None, None)
-            self._close_editor(obj, QAbstractItemDelegate.EndEditHint.NoHint)
-            return True
-        return super().eventFilter(obj, event)
-
-    def _close_editor(self, editor, hint):
-        editor.setProperty("_edit_done", True)
-        self.closeEditor.emit(editor, hint)
-        self._view._edit_item = None
+    def _sync_height(self):
+        doc = self.document()
+        doc.adjustSize()
+        height = int(doc.size().height()) + 8
+        if self.height() != height:
+            self.setFixedHeight(height)
 
 
 class ExtractsView(QWidget):
@@ -97,7 +103,6 @@ class ExtractsView(QWidget):
     jump_requested = pyqtSignal(dict)
     def __init__(self):
         super().__init__()
-        self._edit_item = None
         self.setup_ui()
 
     def _db_conn(self):
@@ -182,23 +187,24 @@ class ExtractsView(QWidget):
 
         # No Qt edit triggers: single-click must only select, and
         # Enter/double-click is owned by _on_item_activated (which opens
-        # the Extract Editor). The delegate below serves the dormant
-        # inline-edit path until #25 retires it.
+        # the Extract Editor — the only place where text is edited).
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._capture_delegate = _CaptureTextDelegate(self)
-        self.tree.setItemDelegateForColumn(0, self._capture_delegate)
 
         self._build_editor_page(layout)
         self._return_item = None
         self._return_expanded = []
         self._editor_open = False
+        self._editor_dirty = False
+        self._editor_extract_id = None
+        self._editor_doc_id = None
+        self._editor_blocks = []
 
         self.setLayout(layout)
         self.refresh()
 
     def _build_editor_page(self, layout):
-        """The full-area Extract Editor (reading mode): Back + title +
-        a scrollable paper document with one block per Capture."""
+        """The full-area Extract Editor: Back + Save + title + a scrollable
+        paper document with one block per Capture (text blocks editable)."""
         self.editor_page = QWidget()
         ed = QVBoxLayout(self.editor_page)
         ed.setContentsMargins(30, 30, 30, 30)
@@ -223,6 +229,29 @@ class ExtractsView(QWidget):
         )
         self.back_btn.clicked.connect(self._close_editor)
         back_row.addWidget(self.back_btn)
+
+        # Save persists mid-session edits without leaving the editor;
+        # disabled until something changes (Back auto-saves regardless).
+        self.save_btn = QPushButton("💾 Save")
+        self.save_btn.setFixedHeight(40)
+        self.save_btn.setEnabled(False)
+        self.save_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 0 18px;
+            }
+            QPushButton:hover { background-color: #2980b9; }
+            QPushButton:disabled { background-color: #bdc3c7; color: #f0f0f0; }
+            """
+        )
+        self.save_btn.clicked.connect(self._save_editor)
+        back_row.addWidget(self.save_btn)
         back_row.addStretch()
         ed.addLayout(back_row)
 
@@ -264,7 +293,6 @@ class ExtractsView(QWidget):
         # Belt: these item refs die with the clear below no matter what.
         self._return_item = None
         self._return_expanded = []
-        self._edit_item = None
         self.tree.clear()
         conn = self._db_conn()
         if conn is None:
@@ -289,14 +317,7 @@ class ExtractsView(QWidget):
             doc_item.setData(0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id})
             for extract in extracts:
                 first_cap = extract.captures[0] if extract.captures else None
-                count = len(extract.captures)
-                base_label = (
-                    f"Extract #{extract.id} — {extract.type} "
-                    f"({count} capture{'s' if count != 1 else ''})"
-                )
-                ex_item = QTreeWidgetItem(
-                    [f"{base_label}: {preview_for_extract(extract)}", "↱ Jump"]
-                )
+                ex_item = QTreeWidgetItem([_extract_label(extract), "↱ Jump"])
                 ex_item.setData(
                     0, Qt.ItemDataRole.UserRole,
                     {
@@ -317,9 +338,6 @@ class ExtractsView(QWidget):
                         cap_item = QTreeWidgetItem(
                             [_cap_label(cap.page, cap.text_content or "")]
                         )
-                        # Text rows keep the editable flag for the dormant
-                        # inline-edit path (#25); image rows never edit.
-                        cap_item.setFlags(cap_item.flags() | Qt.ItemFlag.ItemIsEditable)
                     cap_item.setData(
                         0, Qt.ItemDataRole.UserRole,
                         {
@@ -393,6 +411,12 @@ class ExtractsView(QWidget):
             title += f"  ·  {display_title(path, Path(path).name)}"
         self.editor_title.setText(title)
 
+        self._editor_extract_id = extract.id
+        self._editor_doc_id = data.get("doc_id")
+        self._editor_dirty = False
+        self.save_btn.setEnabled(False)
+        self._editor_blocks = []
+
         while self.editor_layout.count():
             block = self.editor_layout.takeAt(0)
             w = block.widget()
@@ -439,18 +463,75 @@ class ExtractsView(QWidget):
             )
             self.editor_layout.addWidget(image_label)
         else:
-            text_label = QLabel((cap.text_content or "").strip())
-            text_label.setObjectName("cap_text")
-            text_label.setTextFormat(Qt.TextFormat.PlainText)
-            text_label.setWordWrap(True)
-            text_label.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse
-            )
-            text_label.setStyleSheet("color: #1a1a1a; font-size: 15px;")
-            self.editor_layout.addWidget(text_label)
+            block = _TextBlockEdit(cap.text_content or "")
+            block.textChanged.connect(self._mark_dirty)
+            self.editor_layout.addWidget(block)
+            self._editor_blocks.append((cap.id, block))
+
+    def _mark_dirty(self):
+        """A text block changed: enable Save (Back would auto-save anyway)."""
+        self._editor_dirty = True
+        self.save_btn.setEnabled(True)
+
+    def _save_editor(self):
+        """Persist every text block of the open Extract (shared by the
+        Save button and Back auto-save) and refresh the tree previews in
+        place, so Back's selection/expansion restore hits live items."""
+        if not self._editor_open or self._editor_extract_id is None:
+            return False
+        conn = self._db_conn()
+        if conn is None:
+            return False
+        texts = {capture_id: edit.toPlainText() for capture_id, edit in self._editor_blocks}
+        if not save_extract_texts(conn, self._editor_extract_id, texts):
+            return False
+        self._editor_dirty = False
+        self.save_btn.setEnabled(False)
+        self._sync_tree_preview()
+        return True
+
+    def _sync_tree_preview(self):
+        """Update the origin Extract's row label and its text Capture rows
+        from the DB without rebuilding the tree (structure never changes:
+        count, pages and rects are untouched by edits)."""
+        conn = self._db_conn()
+        if conn is None or self._editor_extract_id is None or self._return_item is None:
+            return
+        origin_data = self._return_item.data(0, Qt.ItemDataRole.UserRole) or {}
+        ex_item = (
+            self._return_item
+            if origin_data.get("extract_id") == self._editor_extract_id
+            else self._return_item.parent()
+        )
+        if ex_item is None:
+            return
+        extract = next(
+            (
+                e
+                for e in list_extracts_for_doc(conn, self._editor_doc_id)
+                if e.id == self._editor_extract_id
+            ),
+            None,
+        )
+        if extract is None:
+            return
+        ex_item.setText(0, _extract_label(extract))
+        by_id = {c.id: c for c in extract.captures}
+        for i in range(ex_item.childCount()):
+            cap_item = ex_item.child(i)
+            data = cap_item.data(0, Qt.ItemDataRole.UserRole) or {}
+            cap = by_id.get(data.get("capture_id"))
+            if cap is None or cap.kind == "image":
+                continue
+            cap_item.setText(0, _cap_label(cap.page, cap.text_content or ""))
+            data["text"] = cap.text_content or ""
+            cap_item.setData(0, Qt.ItemDataRole.UserRole, data)
 
     def _close_editor(self):
-        """Back: hide the editor, restore the tree exactly as it was."""
+        """Back: auto-save pending edits, hide the editor, restore the tree
+        exactly as it was."""
+        if self._editor_dirty:
+            self._save_editor()
         self.editor_page.hide()
         self.header_label.show()
         self.refresh_btn.show()
@@ -471,35 +552,12 @@ class ExtractsView(QWidget):
         self._return_item = None
         self._return_expanded = []
         self._editor_open = False
+        self._editor_dirty = False
+        self._editor_extract_id = None
+        self._editor_doc_id = None
+        self._editor_blocks = []
+        self.save_btn.setEnabled(False)
         self.tree.setFocus()
-
-    def _begin_capture_edit(self, item):
-        """Open the inline editor on a text Capture row."""
-        if self._edit_item is not None:
-            return
-        self._edit_item = item
-        self.tree.editItem(item, 0)
-
-    def _edit_item_data(self):
-        if self._edit_item is None:
-            return None
-        return self._edit_item.data(0, Qt.ItemDataRole.UserRole) or {}
-
-    def _apply_capture_edit(self, new_text: str):
-        """Persist an inline edit; empty/whitespace edits are rejected by the
-        store and leave both the row and the displayed label untouched."""
-        item = self._edit_item
-        if item is None:
-            return
-        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-        capture_id = data.get("capture_id")
-        conn = self._db_conn()
-        if capture_id is None or conn is None:
-            return
-        if update_capture_text(conn, capture_id, new_text):
-            data["text"] = new_text
-            item.setData(0, Qt.ItemDataRole.UserRole, data)
-            item.setText(0, _cap_label(data["page"], new_text))
 
     def _jump_from_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}
