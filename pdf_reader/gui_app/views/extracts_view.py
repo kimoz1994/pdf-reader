@@ -4,9 +4,9 @@ Extracts View — browse captured material.
 Shows the library's Documents, each expandable into its Extracts
 (newest-first), and each Extract into its Captures (text or image).
 Activating a row swaps the tree for the full-area Extract Editor:
-a Word-like document of page-marked blocks where text segments are
-editable in place (Save button and Back auto-save persist the Extract;
-images are protected), with Back returning to the exact tree row.
+a Word-like document where text segments are editable in place
+(Save button and Back auto-save persist the Extract; images are
+protected), with Back returning to the exact tree row.
 Deleting an Extract removes it and its Captures after confirmation.
 All data comes from the headless persistence seam (`services.extract_store`).
 """
@@ -448,12 +448,9 @@ class ExtractsView(QWidget):
         self.back_btn.setFocus()
 
     def _add_block(self, cap):
-        """One page-marked document block for a single Capture."""
-        marker = QLabel(f"Page {cap.page + 1}")
-        marker.setObjectName("page_marker")
-        marker.setStyleSheet("color: #999; font-size: 12px; font-weight: bold;")
-        self.editor_layout.addWidget(marker)
-
+        """One continuous document block for a single Capture. No page
+        markers between blocks: a group should read as one flow of
+        text/images."""
         if cap.kind == "image" and cap.image_blob:
             image_label = QLabel()
             image_label.setObjectName("cap_image")
