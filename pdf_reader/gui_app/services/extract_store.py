@@ -3,11 +3,24 @@
 Owns all SQL for the `extracts` and `captures` tables in `library.db`.
 Pure Python + sqlite3, no Qt imports — this is the single testable seam
 for the extract workflow. The GUI never touches these tables directly.
+
+Text model: an Extract's text lives in one blob (`extracts.text_content`).
+Captures are immutable anchors (page + rect + kind + image blob) used for
+blue re-draw and Jump; per-capture text is never stored. Inline images are
+marked in the blob with the object-replacement character (U+FFFC), one per
+image Capture in capture order — the same character Qt uses, so editor
+round-trips are lossless.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 import os
+
+# Marks where an inline image sits inside the text blob. One per image
+# Capture, in capture order; count is normalized on every save.
+IMG_PLACEHOLDER = "\uFFFC"
+
+_BLOB_SEP = "\n\n"
 
 
 @dataclass
@@ -30,17 +43,25 @@ class Extract:
     doc_id: int
     type: str  # 'text' | 'image' | 'combined'
     captures: List[Capture] = field(default_factory=list)
+    text_content: Optional[str] = None  # the whole-Extract text blob
 
 
 def init_schema(conn) -> None:
-    """Create the extracts/captures tables idempotently."""
+    """Create the extracts/captures tables idempotently.
+
+    Also migrates pre-blob databases once: adds `extracts.text_content`,
+    backfills it from legacy per-capture text (capture id order, images
+    as placeholders), then NULLs the per-capture text — captures are
+    anchors from here on. Idempotent via a column-existence check.
+    """
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS extracts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             doc_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            type TEXT NOT NULL
+            type TEXT NOT NULL,
+            text_content TEXT
         )
         """
     )
@@ -58,6 +79,24 @@ def init_schema(conn) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_extracts_doc ON extracts(doc_id)")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(extracts)").fetchall()}
+    if "text_content" not in cols:
+        conn.execute("ALTER TABLE extracts ADD COLUMN text_content TEXT")
+        for (eid,) in conn.execute("SELECT id FROM extracts").fetchall():
+            caps = conn.execute(
+                "SELECT kind, text_content FROM captures WHERE extract_id = ? ORDER BY id",
+                (eid,),
+            ).fetchall()
+            elements = [
+                cap_text if kind == "text" else IMG_PLACEHOLDER
+                for kind, cap_text in caps
+                if kind == "image" or (cap_text and cap_text.strip())
+            ]
+            conn.execute(
+                "UPDATE extracts SET text_content = ? WHERE id = ?",
+                (_BLOB_SEP.join(elements), eid),
+            )
+        conn.execute("UPDATE captures SET text_content = NULL WHERE kind = 'text'")
     conn.commit()
 
 
@@ -79,13 +118,23 @@ def _rect_from_str(s: str) -> Tuple[float, float, float, float]:
 
 
 def commit_working_set(conn, doc_id: int, captures: List[Capture]) -> Optional[int]:
-    """Persist one Working Set as a single Extract. Returns its id, or None if empty."""
+    """Persist one Working Set as a single Extract. Returns its id, or None if empty.
+
+    The Extract's text blob joins the captures' texts (blank-line separated)
+    with one placeholder per image Capture, in capture order. Captures are
+    stored as anchors: their `text_content` is never persisted.
+    """
     if not captures:
         return None
 
+    elements = [
+        cap.text_content if cap.kind == "text" else IMG_PLACEHOLDER
+        for cap in captures
+        if cap.kind == "image" or (cap.text_content and cap.text_content.strip())
+    ]
     cur = conn.execute(
-        "INSERT INTO extracts (doc_id, type) VALUES (?, ?)",
-        (doc_id, _derive_type(captures)),
+        "INSERT INTO extracts (doc_id, type, text_content) VALUES (?, ?, ?)",
+        (doc_id, _derive_type(captures), _BLOB_SEP.join(elements)),
     )
     extract_id = cur.lastrowid
 
@@ -100,7 +149,7 @@ def commit_working_set(conn, doc_id: int, captures: List[Capture]) -> Optional[i
                 cap.page,
                 _rect_to_str(cap.rect),
                 cap.kind,
-                cap.text_content,
+                None,
                 cap.image_blob,
             ),
         )
@@ -118,7 +167,7 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     """All Extracts for a Document, newest-first, with their Captures."""
     extract_rows = conn.execute(
         """
-        SELECT id, doc_id, type FROM extracts
+        SELECT id, doc_id, type, text_content FROM extracts
         WHERE doc_id = ?
         ORDER BY id DESC
         """,
@@ -126,7 +175,7 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     ).fetchall()
 
     extracts = []
-    for eid, edoc, etype in extract_rows:
+    for eid, edoc, etype, blob in extract_rows:
         cap_rows = conn.execute(
             """
             SELECT id, page, rect, kind, text_content, image_blob FROM captures
@@ -146,7 +195,9 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
             )
             for cap_id, page, rect, kind, text_content, image_blob in cap_rows
         ]
-        extracts.append(Extract(id=eid, doc_id=edoc, type=etype, captures=captures))
+        extracts.append(
+            Extract(id=eid, doc_id=edoc, type=etype, captures=captures, text_content=blob)
+        )
     return extracts
 
 
@@ -156,22 +207,19 @@ _PREVIEW_LEN = 60
 def preview_for_extract(extract: Extract) -> str:
     """One-line content preview for an Extract's row in the tree.
 
-    First non-empty text Capture, whitespace-normalised and truncated to
-    ~60 characters with an ellipsis. Image-only Extracts (no text Captures
-    at all) fall back to their page span (`p. 4`, `pp. 4–5`, `pp. 1, 5`);
-    a text-bearing Extract whose text is all empty shows `(empty)`.
-    Derived at render time — never persisted.
+    First text chunk of the Extract's blob (whitespace-normalised,
+    placeholders stripped, truncated to ~60 characters with an ellipsis).
+    Image-only Extracts fall back to their page span (`p. 4`, `pp. 4–5`,
+    `pp. 1, 5`); a text-bearing Extract whose blob has no text shows
+    `(empty)`. Derived at render time — never persisted.
     """
-    texts = [
-        " ".join(c.text_content.split())
-        for c in extract.captures
-        if c.kind == "text" and c.text_content and c.text_content.strip()
-    ]
-    if texts:
-        snippet = texts[0]
-        if len(snippet) > _PREVIEW_LEN:
-            return snippet[:_PREVIEW_LEN] + "…"
-        return snippet
+    blob = extract.text_content or ""
+    for part in blob.split(_BLOB_SEP):
+        snippet = " ".join(part.replace(IMG_PLACEHOLDER, " ").split())
+        if snippet:
+            if len(snippet) > _PREVIEW_LEN:
+                return snippet[:_PREVIEW_LEN] + "…"
+            return snippet
 
     if any(c.kind == "text" for c in extract.captures):
         return "(empty)"
@@ -269,26 +317,47 @@ def capture_overlaps_extract(
     return False
 
 
-def save_extract_texts(conn, extract_id: int, texts: dict) -> bool:
-    """Persist edited text for one Extract's text Captures in one call.
+def _normalize_blob(text: str, image_count: int) -> str:
+    """Reconcile the blob's placeholder count with the Extract's image
+    Captures: missing placeholders are appended at the end (images can
+    never be removed — deleting one relocates it), extras are stripped
+    from the end."""
+    count = text.count(IMG_PLACEHOLDER)
+    if image_count == 0:
+        return text.replace(IMG_PLACEHOLDER, "")
+    if count < image_count:
+        missing = _BLOB_SEP.join([IMG_PLACEHOLDER] * (image_count - count))
+        text = f"{text}{_BLOB_SEP}{missing}" if text.strip() else missing
+    elif count > image_count:
+        for _ in range(count - image_count):
+            idx = text.rfind(IMG_PLACEHOLDER)
+            text = text[:idx] + text[idx + 1 :]
+        text = text.rstrip()
+    return text
 
-    `texts` maps capture id -> new text. Empty and whitespace-only values
-    are allowed: content and existence are independent, so segments may be
-    emptied (one, several, or all) without the Extract disappearing.
-    Image Captures and captures belonging to other Extracts are never
-    touched. Returns False only when the Extract itself does not exist.
+
+def save_extract_text(conn, extract_id: int, text: str) -> bool:
+    """Persist an Extract's whole text blob (the joined editor document).
+
+    The placeholder count is normalized to the Extract's image Captures:
+    images are immutable — a deleted placeholder is re-appended at the
+    end, extras are dropped. Empty and whitespace-only blobs are allowed:
+    content and existence are independent. Returns False only when the
+    Extract itself does not exist.
     """
     exists = conn.execute(
         "SELECT 1 FROM extracts WHERE id = ?", (extract_id,)
     ).fetchone()
     if exists is None:
         return False
-    for capture_id, text in texts.items():
-        conn.execute(
-            "UPDATE captures SET text_content = ? "
-            "WHERE id = ? AND extract_id = ? AND kind = 'text'",
-            (text, capture_id, extract_id),
-        )
+    image_count = conn.execute(
+        "SELECT COUNT(*) FROM captures WHERE extract_id = ? AND kind = 'image'",
+        (extract_id,),
+    ).fetchone()[0]
+    conn.execute(
+        "UPDATE extracts SET text_content = ? WHERE id = ?",
+        (_normalize_blob(text, image_count), extract_id),
+    )
     conn.commit()
     return True
 
