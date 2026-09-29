@@ -443,6 +443,28 @@ def test_save_extract_text_all_empty_keeps_extract_and_captures(conn):
     assert extracts[0].text_content == ""
 
 
+def test_save_extract_text_all_empty_with_images_keeps_extract_and_captures(conn):
+    """The reported bug (#34): emptying a mixed Extract — all text and
+    images deleted — persists as empty; deleted content does not
+    resurface on re-open, and the Extract + Capture rows survive."""
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="note"),
+            Capture(page=1, rect=(2, 2, 3, 3), kind="image", image_blob=b"PNG"),
+        ],
+    )
+
+    assert save_extract_text(conn, extract_id, "") is True
+
+    extracts = list_extracts_for_doc(conn, doc_id)
+    assert len(extracts) == 1
+    assert extracts[0].text_content == ""
+    assert len(extracts[0].captures) == 2
+
+
 def test_save_extract_text_leaves_other_extracts_untouched(conn):
     doc_id = seed_pdf(conn)
     keep_id = commit_working_set(
@@ -464,9 +486,9 @@ def test_save_extract_text_leaves_other_extracts_untouched(conn):
     assert extracts[edit_id].text_content == "new"
 
 
-def test_save_extract_text_appends_missing_placeholders(conn):
-    """Images are immutable: a deleted placeholder is re-appended at the
-    end, so the image can never be removed (only reflowed)."""
+def test_save_extract_text_keeps_placeholder_deleted(conn):
+    """Deleting an image from the document deletes it from the blob: the
+    placeholder is not re-appended (the Capture row stays as the anchor)."""
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
@@ -476,13 +498,14 @@ def test_save_extract_text_appends_missing_placeholders(conn):
 
     assert save_extract_text(conn, extract_id, "hello") is True
     e = list_extracts_for_doc(conn, doc_id)[0]
-    assert e.text_content == "hello\n\n" + IMG_PLACEHOLDER
+    assert e.text_content == "hello"
     assert e.captures[0].image_blob == b"PNG"
 
-    # Emptying the text still keeps one placeholder for the image.
+    # Emptying the document stays empty — the image does not resurface.
     assert save_extract_text(conn, extract_id, "") is True
     e = list_extracts_for_doc(conn, doc_id)[0]
-    assert e.text_content == IMG_PLACEHOLDER
+    assert e.text_content == ""
+    assert len(e.captures) == 1
 
 
 def test_save_extract_text_strips_extra_placeholders_from_end(conn):
@@ -745,6 +768,18 @@ def test_preview_image_only_non_contiguous_pages_listed():
         text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
     )
     assert preview_for_extract(ex) == "pp. 1, 5"
+
+
+def test_preview_image_only_with_all_images_deleted_is_empty_marker():
+    """Images are deletable from the document (#34): a pure image Extract
+    whose placeholders are all gone previews (empty) — the Capture
+    anchors stay, but nothing is displayed any more."""
+    ex = make_extract(
+        [image_cap(page=2), image_cap(page=3)],
+        etype="image",
+        text_content="",
+    )
+    assert preview_for_extract(ex) == "(empty)"
 
 
 def test_preview_all_empty_text_without_images_is_empty_marker():
