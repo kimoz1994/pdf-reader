@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QScrollArea,
     QFrame,
-    QPlainTextEdit,
+    QTextEdit,
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QItemSelectionModel, pyqtSignal
@@ -56,26 +56,31 @@ def _extract_label(extract) -> str:
     return f"{base}: {preview_for_extract(extract)}"
 
 
-class _TextBlockEdit(QPlainTextEdit):
+class _TextBlockEdit(QTextEdit):
     """Editable text segment inside the Extract Editor.
 
-    Word-wraps only — soft line breaks never add or remove Captures —
-    and grows its height to fit the wrapped document, so short segments
-    stay one compact line while long ones expand like Word paragraphs.
+    Wraps at the block width — soft line breaks never add or remove
+    Captures — and grows its height to fit the wrapped text, so short
+    segments stay one compact line while long ones expand like Word
+    paragraphs. Height feeds the viewport width into the document
+    explicitly (`setTextWidth`) because only then does `document()
+    .size()` return real pixels; always recalculating for the live
+    width keeps multi-line blocks fully visible instead of clipped.
     """
 
     def __init__(self, text: str):
-        super().__init__(text)
+        super().__init__()
+        self.setPlainText(text)  # not the ctor string: it auto-detects HTML
         self.setObjectName("cap_text")
+        self.setAcceptRichText(False)
         self.document().setDocumentMargin(4)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.setWordWrapMode(QTextOption.WrapMode.WordWrap)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
             """
-            QPlainTextEdit {
+            QTextEdit {
                 background: transparent;
                 border: none;
                 color: #1a1a1a;
@@ -90,9 +95,16 @@ class _TextBlockEdit(QPlainTextEdit):
         self._sync_height()
 
     def _sync_height(self):
+        """Size the now-unconstrained document to the viewport width and
+        match the widget height to the full-space document height —
+        that height already contains its own 2x document margin, so no
+        extra slack is added here."""
+        width = self.viewport().width()
+        if width <= 0:
+            return
         doc = self.document()
-        doc.adjustSize()
-        height = int(doc.size().height()) + 8
+        doc.setTextWidth(width)
+        height = int(doc.size().height()) + self.frameWidth() * 2
         if self.height() != height:
             self.setFixedHeight(height)
 
