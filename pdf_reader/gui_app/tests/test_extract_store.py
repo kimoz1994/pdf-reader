@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 
 from services.extract_store import (
+    IMG_PLACEHOLDER,
     Capture,
     Extract,
     capture_overlaps_extract,
@@ -14,7 +15,7 @@ from services.extract_store import (
     list_extracts_for_doc,
     preview_for_extract,
     resolve_doc_id,
-    save_extract_texts,
+    save_extract_text,
 )
 
 
@@ -47,13 +48,6 @@ def seed_pdf(conn, path="/tmp/book.pdf", name="book.pdf"):
     return conn.execute("SELECT id FROM pdfs WHERE path = ?", (path,)).fetchone()[0]
 
 
-def first_capture_id(conn, kind="text"):
-    row = conn.execute(
-        "SELECT id FROM captures WHERE kind = ? ORDER BY id", (kind,)
-    ).fetchone()
-    return row[0] if row else None
-
-
 def test_init_schema_creates_tables(conn):
     tables = {
         r[0]
@@ -62,6 +56,11 @@ def test_init_schema_creates_tables(conn):
         ).fetchall()
     }
     assert {"extracts", "captures"} <= tables
+
+
+def test_fresh_schema_includes_blob_column(conn):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(extracts)").fetchall()}
+    assert "text_content" in cols
 
 
 def test_commit_empty_working_set_is_noop(conn):
@@ -80,16 +79,19 @@ def test_commit_single_text_capture(conn):
     extract_id = commit_working_set(conn, doc_id, captures)
     assert extract_id is not None
 
-    rows = conn.execute("SELECT id, doc_id, type FROM extracts").fetchall()
-    assert rows == [(extract_id, doc_id, "text")]
+    rows = conn.execute(
+        "SELECT id, doc_id, type, text_content FROM extracts"
+    ).fetchall()
+    assert rows == [(extract_id, doc_id, "text", "hello world")]
 
     cap = conn.execute(
         "SELECT extract_id, page, rect, kind, text_content, image_blob FROM captures"
     ).fetchone()
-    assert cap == (extract_id, 0, "10,20,100,40", "text", "hello world", None)
+    # Captures are anchors: the text lives in the blob, never per-capture.
+    assert cap == (extract_id, 0, "10,20,100,40", "text", None, None)
 
 
-def test_commit_multiple_captures_preserves_order_and_pages(conn):
+def test_commit_multiple_captures_joins_blob_in_order(conn):
     doc_id = seed_pdf(conn)
     captures = [
         Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="first"),
@@ -97,16 +99,34 @@ def test_commit_multiple_captures_preserves_order_and_pages(conn):
     ]
     extract_id = commit_working_set(conn, doc_id, captures)
 
+    blob = conn.execute(
+        "SELECT text_content FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()[0]
+    assert blob == "first\n\nthird page"
+
     caps = conn.execute(
         "SELECT page, rect, kind, text_content FROM captures ORDER BY id"
     ).fetchall()
     assert caps == [
-        (0, "10,20,100,40", "text", "first"),
-        (2, "5,5,50,25", "text", "third page"),
+        (0, "10,20,100,40", "text", None),
+        (2, "5,5,50,25", "text", None),
     ]
 
 
-def test_commit_image_capture_stores_blob(conn):
+def test_commit_skips_whitespace_text_captures(conn):
+    doc_id = seed_pdf(conn)
+    captures = [
+        Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="   \n "),
+        Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="real"),
+    ]
+    extract_id = commit_working_set(conn, doc_id, captures)
+    blob = conn.execute(
+        "SELECT text_content FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()[0]
+    assert blob == "real"
+
+
+def test_commit_image_capture_stores_blob_and_placeholder(conn):
     doc_id = seed_pdf(conn)
     captures = [Capture(page=1, rect=(0, 0, 10, 10), kind="image", image_blob=b"PNGDATA")]
     extract_id = commit_working_set(conn, doc_id, captures)
@@ -115,9 +135,13 @@ def test_commit_image_capture_stores_blob(conn):
         == "image"
     )
     blob = conn.execute(
+        "SELECT text_content FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()[0]
+    assert blob == IMG_PLACEHOLDER
+    stored = conn.execute(
         "SELECT image_blob FROM captures WHERE extract_id = ?", (extract_id,)
     ).fetchone()[0]
-    assert blob == b"PNGDATA"
+    assert stored == b"PNGDATA"
 
 
 def test_image_blob_round_trips_through_list_extracts(conn):
@@ -137,17 +161,17 @@ def test_image_blob_round_trips_through_list_extracts(conn):
     assert cap.rect == (10, 20, 60, 40)
 
 
-def test_commit_mixed_captures_derived_type_combined(conn):
+def test_commit_mixed_captures_derived_type_combined_and_blob(conn):
     doc_id = seed_pdf(conn)
     captures = [
         Capture(page=0, rect=(10, 20, 100, 40), kind="text", text_content="note"),
         Capture(page=1, rect=(0, 0, 10, 10), kind="image", image_blob=b"PNGDATA"),
     ]
     extract_id = commit_working_set(conn, doc_id, captures)
-    assert (
-        conn.execute("SELECT type FROM extracts WHERE id = ?", (extract_id,)).fetchone()[0]
-        == "combined"
-    )
+    row = conn.execute(
+        "SELECT type, text_content FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()
+    assert row == ("combined", "note\n\n" + IMG_PLACEHOLDER)
 
 
 def test_working_set_spanning_pages_commits_together(conn):
@@ -165,6 +189,10 @@ def test_working_set_spanning_pages_commits_together(conn):
     assert conn.execute(
         "SELECT COUNT(*) FROM captures WHERE extract_id = ?", (extract_id,)
     ).fetchone()[0] == 3
+    blob = conn.execute(
+        "SELECT text_content FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()[0]
+    assert blob == "a\n\nb\n\nc"
 
 
 def test_list_docs_with_extracts(conn):
@@ -207,11 +235,11 @@ def test_list_extracts_scoped_to_doc(conn):
 
     a_extracts = list_extracts_for_doc(conn, doc_a)
     b_extracts = list_extracts_for_doc(conn, doc_b)
-    assert [e.captures[0].text_content for e in a_extracts] == ["in A"]
-    assert [e.captures[0].text_content for e in b_extracts] == ["in B"]
+    assert [e.text_content for e in a_extracts] == ["in A"]
+    assert [e.text_content for e in b_extracts] == ["in B"]
 
 
-def test_list_extracts_includes_captures(conn):
+def test_list_extracts_includes_captures_and_blob(conn):
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
@@ -226,9 +254,10 @@ def test_list_extracts_includes_captures(conn):
     e = extracts[0]
     assert e.id == extract_id
     assert e.type == "text"
+    assert e.text_content == "alpha\n\nbeta"
     assert len(e.captures) == 2
     assert e.captures[0].rect == (0, 0, 1, 1)
-    assert e.captures[1].text_content == "beta"
+    assert e.captures[1].page == 1
 
 
 def test_resolve_doc_id(conn):
@@ -251,7 +280,7 @@ def test_extracts_survive_reopen(conn, tmp_path):
     init_schema(c2)
     extracts = list_extracts_for_doc(c2, doc_id)
     assert len(extracts) == 1
-    assert extracts[0].captures[0].text_content == "persisted"
+    assert extracts[0].text_content == "persisted"
     c2.close()
 
 
@@ -326,12 +355,12 @@ def test_delete_extract_leaves_other_extracts_untouched(conn):
 
     extracts = list_extracts_for_doc(conn, doc_id)
     assert [e.id for e in extracts] == [keep]
-    assert extracts[0].captures[0].text_content == "keep"
+    assert extracts[0].text_content == "keep"
     assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 1
 
 
 def test_list_extracts_includes_capture_ids(conn):
-    """Captures read back carry their row id (needed for in-place edits)."""
+    """Captures read back carry their row id (image rows key off it)."""
     doc_id = seed_pdf(conn)
     commit_working_set(
         conn,
@@ -346,18 +375,9 @@ def test_list_extracts_includes_capture_ids(conn):
     assert caps[0].id != caps[1].id
 
 
-def _capture_ids(conn, extract_id):
-    return [
-        r[0]
-        for r in conn.execute(
-            "SELECT id FROM captures WHERE extract_id = ? ORDER BY id",
-            (extract_id,),
-        )
-    ]
-
-
-def test_save_extract_texts_replaces_group_text(conn):
-    """One group-save call replaces several segments of the same Extract."""
+def test_save_extract_text_replaces_blob_keeps_anchors(conn):
+    """One call replaces the whole blob; captures (page/rect/kind/blob)
+    are untouched — geometry never changes from an edit."""
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
@@ -367,51 +387,44 @@ def test_save_extract_texts_replaces_group_text(conn):
             Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="other"),
         ],
     )
-    cap_ids = _capture_ids(conn, extract_id)
 
-    assert (
-        save_extract_texts(
-            conn, extract_id, {cap_ids[0]: "after\nsecond line", cap_ids[1]: "second"}
-        )
-        is True
-    )
+    assert save_extract_text(conn, extract_id, "after\nsecond line") is True
 
-    extracts = list_extracts_for_doc(conn, doc_id)
-    assert extracts[0].id == extract_id
-    caps = extracts[0].captures
-    assert [c.text_content for c in caps] == ["after\nsecond line", "second"]
-    # Geometry untouched even with hard line breaks: capture count, pages
-    # and rects never change (AC — soft wraps in the editor never reach
-    # the store as structure).
-    assert [(c.page, c.rect) for c in caps] == [(0, (0, 0, 1, 1)), (1, (2, 2, 3, 3))]
+    e = list_extracts_for_doc(conn, doc_id)[0]
+    assert e.text_content == "after\nsecond line"
+    assert [(c.page, c.rect, c.kind) for c in e.captures] == [
+        (0, (0, 0, 1, 1), "text"),
+        (1, (2, 2, 3, 3), "text"),
+    ]
+    stored = conn.execute(
+        "SELECT text_content FROM captures WHERE extract_id = ?", (extract_id,)
+    ).fetchall()
+    assert all(row[0] is None for row in stored)
 
 
-def test_save_extract_texts_allows_empty_segments(conn):
-    """Amended store rule: empty and whitespace-only segments save fine —
-    content and existence are independent (the trimmed-empty rejection
-    from the inline-edit era is gone)."""
+def test_save_extract_text_allows_empty_blob(conn):
+    """Empty and whitespace-only blobs save fine — content and existence
+    are independent (the Extract never disappears from a content edit)."""
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
         doc_id,
         [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="keep me")],
     )
-    cap_id = first_capture_id(conn)
 
-    assert save_extract_texts(conn, extract_id, {cap_id: ""}) is True
-    assert save_extract_texts(conn, extract_id, {cap_id: "   \n\t "}) is True
+    assert save_extract_text(conn, extract_id, "") is True
+    assert save_extract_text(conn, extract_id, "   \n\t ") is True
     assert (
         conn.execute(
-            "SELECT text_content FROM captures WHERE id = ?", (cap_id,)
+            "SELECT text_content FROM extracts WHERE id = ?", (extract_id,)
         ).fetchone()[0]
         == "   \n\t "
     )
-    # The Extract itself never disappears from a content edit.
     assert [e.id for e in list_extracts_for_doc(conn, doc_id)] == [extract_id]
 
 
-def test_save_extract_texts_all_empty_keeps_extract_and_captures(conn):
-    """Emptying every segment leaves the Extract row and all Captures."""
+def test_save_extract_text_all_empty_keeps_extract_and_captures(conn):
+    """Emptying the whole blob leaves the Extract row and all Captures."""
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
@@ -421,17 +434,16 @@ def test_save_extract_texts_all_empty_keeps_extract_and_captures(conn):
             Capture(page=1, rect=(2, 2, 3, 3), kind="text", text_content="two"),
         ],
     )
-    cap_ids = _capture_ids(conn, extract_id)
 
-    assert save_extract_texts(conn, extract_id, {cid: "" for cid in cap_ids}) is True
+    assert save_extract_text(conn, extract_id, "") is True
 
     extracts = list_extracts_for_doc(conn, doc_id)
     assert len(extracts) == 1
     assert len(extracts[0].captures) == 2
-    assert all(c.text_content == "" for c in extracts[0].captures)
+    assert extracts[0].text_content == ""
 
 
-def test_save_extract_texts_leaves_other_extracts_untouched(conn):
+def test_save_extract_text_leaves_other_extracts_untouched(conn):
     doc_id = seed_pdf(conn)
     keep_id = commit_working_set(
         conn,
@@ -443,81 +455,215 @@ def test_save_extract_texts_leaves_other_extracts_untouched(conn):
         doc_id,
         [Capture(page=1, rect=(9, 9, 10, 10), kind="text", text_content="old")],
     )
-    edit_cap = _capture_ids(conn, edit_id)[0]
 
-    assert save_extract_texts(conn, edit_id, {edit_cap: "new"}) is True
+    assert save_extract_text(conn, edit_id, "new") is True
 
     extracts = {e.id: e for e in list_extracts_for_doc(conn, doc_id)}
     assert set(extracts) == {keep_id, edit_id}
-    assert extracts[keep_id].captures[0].text_content == "untouched"
-    assert extracts[edit_id].captures[0].text_content == "new"
+    assert extracts[keep_id].text_content == "untouched"
+    assert extracts[edit_id].text_content == "new"
 
 
-def test_save_extract_texts_ignores_image_and_foreign_captures(conn):
-    """Image Captures and captures of other Extracts never change."""
+def test_save_extract_text_appends_missing_placeholders(conn):
+    """Images are immutable: a deleted placeholder is re-appended at the
+    end, so the image can never be removed (only reflowed)."""
     doc_id = seed_pdf(conn)
-    other_id = commit_working_set(
+    extract_id = commit_working_set(
         conn,
         doc_id,
-        [Capture(page=0, rect=(1, 1, 2, 2), kind="text", text_content="other extract")],
+        [Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG")],
     )
-    edit_id = commit_working_set(
+
+    assert save_extract_text(conn, extract_id, "hello") is True
+    e = list_extracts_for_doc(conn, doc_id)[0]
+    assert e.text_content == "hello\n\n" + IMG_PLACEHOLDER
+    assert e.captures[0].image_blob == b"PNG"
+
+    # Emptying the text still keeps one placeholder for the image.
+    assert save_extract_text(conn, extract_id, "") is True
+    e = list_extracts_for_doc(conn, doc_id)[0]
+    assert e.text_content == IMG_PLACEHOLDER
+
+
+def test_save_extract_text_strips_extra_placeholders_from_end(conn):
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
         conn,
         doc_id,
-        [
-            Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG"),
-            Capture(page=1, rect=(3, 3, 4, 4), kind="text", text_content="mine"),
-        ],
-    )
-    image_id, mine_id = _capture_ids(conn, edit_id)
-    foreign_id = _capture_ids(conn, other_id)[0]
-
-    assert (
-        save_extract_texts(
-            conn,
-            edit_id,
-            {image_id: "nope", mine_id: "edited", foreign_id: "tampered"},
-        )
-        is True
+        [Capture(page=0, rect=(0, 0, 5, 5), kind="image", image_blob=b"PNG")],
     )
 
-    extracts = {e.id: e for e in list_extracts_for_doc(conn, doc_id)}
-    edit_caps = extracts[edit_id].captures
-    assert edit_caps[0].text_content is None
-    assert edit_caps[0].image_blob == b"PNG"
-    assert edit_caps[1].text_content == "edited"
-    assert extracts[other_id].captures[0].text_content == "other extract"
+    pasted = "a\n\n" + IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER
+    assert save_extract_text(conn, extract_id, pasted) is True
+    e = list_extracts_for_doc(conn, doc_id)[0]
+    assert e.text_content == "a\n\n" + IMG_PLACEHOLDER
 
 
-def test_save_extract_texts_unknown_extract_returns_false(conn):
-    assert save_extract_texts(conn, 9999, {1: "anything"}) is False
+def test_save_extract_text_strips_placeholders_without_images(conn):
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="x")],
+    )
+
+    assert save_extract_text(conn, extract_id, "x\n\n" + IMG_PLACEHOLDER) is True
+    e = list_extracts_for_doc(conn, doc_id)[0]
+    assert e.text_content == "x\n\n"
 
 
-def test_save_extract_texts_survives_reopen(conn, tmp_path):
-    """Group-saved text persists across an app restart (store-seam AC)."""
+def test_save_extract_text_unknown_extract_returns_false(conn):
+    assert save_extract_text(conn, 9999, "anything") is False
+
+
+def test_save_extract_text_survives_reopen(conn, tmp_path):
+    """A saved blob persists across an app restart (store-seam AC)."""
     doc_id = seed_pdf(conn)
     extract_id = commit_working_set(
         conn,
         doc_id,
         [Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="draft")],
     )
-    cap_id = first_capture_id(conn)
-    assert save_extract_texts(conn, extract_id, {cap_id: "final wording"}) is True
+    assert save_extract_text(conn, extract_id, "final wording") is True
     conn.close()
 
     db_path = tmp_path / "test.db"
     c2 = sqlite3.connect(db_path)
     init_schema(c2)
     extracts = list_extracts_for_doc(c2, doc_id)
-    assert extracts[0].captures[0].text_content == "final wording"
+    assert extracts[0].text_content == "final wording"
     c2.close()
 
 
-def make_extract(captures, etype="text", extract_id=1):
-    return Extract(id=extract_id, doc_id=1, type=etype, captures=captures)
+# --- migration from the pre-blob schema -----------------------------------
 
 
-def text_cap(text, page=0):
+def _connect(tmp_path, name="mig.db"):
+    return sqlite3.connect(tmp_path / name)
+
+
+def _legacy_schema(conn):
+    """Pre-blob schema: extracts without text_content, captures with text."""
+    conn.execute(
+        """
+        CREATE TABLE extracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            type TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE captures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            extract_id INTEGER NOT NULL REFERENCES extracts(id) ON DELETE CASCADE,
+            page INTEGER NOT NULL,
+            rect TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            text_content TEXT,
+            image_blob BLOB
+        )
+        """
+    )
+
+
+def test_migration_backfills_blob_and_nulls_capture_text(tmp_path):
+    conn = _connect(tmp_path)
+    _legacy_schema(conn)
+    cur = conn.execute("INSERT INTO extracts (doc_id, type) VALUES (1, 'combined')")
+    eid = cur.lastrowid
+    conn.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, text_content)"
+        " VALUES (?, 0, '0,0,1,1', 'text', 'first')",
+        (eid,),
+    )
+    conn.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, image_blob)"
+        " VALUES (?, 1, '2,2,3,3', 'image', ?)",
+        (eid, b"PNG"),
+    )
+    conn.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, text_content)"
+        " VALUES (?, 2, '4,4,5,5', 'text', 'third')",
+        (eid,),
+    )
+    conn.commit()
+
+    init_schema(conn)
+
+    blob = conn.execute(
+        "SELECT text_content FROM extracts WHERE id = ?", (eid,)
+    ).fetchone()[0]
+    assert blob == "first\n\n" + IMG_PLACEHOLDER + "\n\nthird"
+    caps = conn.execute(
+        "SELECT kind, text_content FROM captures ORDER BY id"
+    ).fetchall()
+    assert caps == [("text", None), ("image", None), ("text", None)]
+    conn.close()
+
+
+def test_migration_preserves_image_only_and_empty_extracts(tmp_path):
+    conn = _connect(tmp_path)
+    _legacy_schema(conn)
+    cur = conn.execute("INSERT INTO extracts (doc_id, type) VALUES (1, 'image')")
+    img_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, image_blob)"
+        " VALUES (?, 3, '0,0,1,1', 'image', ?)",
+        (img_id, b"PNG"),
+    )
+    cur = conn.execute("INSERT INTO extracts (doc_id, type) VALUES (1, 'text')")
+    empty_id = cur.lastrowid
+    conn.commit()
+
+    init_schema(conn)
+
+    rows = dict(
+        conn.execute("SELECT id, text_content FROM extracts").fetchall()
+    )
+    assert rows[img_id] == IMG_PLACEHOLDER
+    assert rows[empty_id] == ""
+    conn.close()
+
+
+def test_migration_is_idempotent(tmp_path):
+    conn = _connect(tmp_path)
+    _legacy_schema(conn)
+    conn.execute("INSERT INTO extracts (doc_id, type) VALUES (1, 'text')")
+    eid = conn.execute("SELECT id FROM extracts").fetchone()[0]
+    conn.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, text_content)"
+        " VALUES (?, 0, '0,0,1,1', 'text', 'keep')",
+        (eid,),
+    )
+    conn.commit()
+
+    init_schema(conn)
+    init_schema(conn)
+
+    blob = conn.execute(
+        "SELECT text_content FROM extracts WHERE id = ?", (eid,)
+    ).fetchone()[0]
+    assert blob == "keep"
+    conn.close()
+
+
+# --- previews --------------------------------------------------------------
+
+
+def make_extract(captures, etype="text", extract_id=1, text_content=None):
+    return Extract(
+        id=extract_id,
+        doc_id=1,
+        type=etype,
+        captures=captures,
+        text_content=text_content,
+    )
+
+
+def text_cap(text=None, page=0):
     return Capture(page=page, rect=(0, 0, 1, 1), kind="text", text_content=text)
 
 
@@ -526,13 +672,13 @@ def image_cap(page=0):
 
 
 def test_preview_short_text_is_whole_text():
-    ex = make_extract([text_cap("The mitochondria is the powerhouse")])
+    ex = make_extract([text_cap()], text_content="The mitochondria is the powerhouse")
     assert preview_for_extract(ex) == "The mitochondria is the powerhouse"
 
 
 def test_preview_truncates_after_60_chars_with_ellipsis():
     long_text = "x" * 61
-    ex = make_extract([text_cap(long_text)])
+    ex = make_extract([text_cap()], text_content=long_text)
     preview = preview_for_extract(ex)
     assert len(preview) == 61  # 60 chars + ellipsis
     assert preview.endswith("…")
@@ -540,37 +686,69 @@ def test_preview_truncates_after_60_chars_with_ellipsis():
 
 
 def test_preview_normalizes_whitespace_to_one_line():
-    ex = make_extract([text_cap("first line\nsecond   line\tends")])
+    ex = make_extract([text_cap()], text_content="first line\nsecond   line\tends")
     assert preview_for_extract(ex) == "first line second line ends"
 
 
+def test_preview_uses_first_text_chunk_of_blob():
+    ex = make_extract(
+        [text_cap(), text_cap(page=1)],
+        text_content="first paragraph\n\nsecond paragraph",
+    )
+    assert preview_for_extract(ex) == "first paragraph"
+
+
 def test_preview_combined_uses_first_text_not_images():
-    """Combined Extract: preview comes from the first text Capture, even
-    when images are captured before it."""
+    """Combined Extract: placeholders are skipped — the preview comes from
+    the first text chunk even when images are captured before it."""
     ex = make_extract(
         [image_cap(page=7), text_cap("quoted insight"), image_cap(page=9)],
         etype="combined",
+        text_content=IMG_PLACEHOLDER + "\n\nquoted insight\n\n" + IMG_PLACEHOLDER,
     )
     assert preview_for_extract(ex) == "quoted insight"
 
 
+def test_preview_strips_placeholder_inside_text_chunk():
+    """Text typed right next to an image (no blank line) still previews
+    cleanly — the placeholder is dropped, words re-joined."""
+    ex = make_extract(
+        [text_cap(), image_cap()],
+        etype="combined",
+        text_content="before" + IMG_PLACEHOLDER + "after",
+    )
+    assert preview_for_extract(ex) == "before after"
+
+
 def test_preview_image_only_single_page():
-    ex = make_extract([image_cap(page=2), image_cap(page=2)], etype="image")
+    ex = make_extract(
+        [image_cap(page=2), image_cap(page=2)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
+    )
     assert preview_for_extract(ex) == "p. 3"
 
 
 def test_preview_image_only_contiguous_page_range():
-    ex = make_extract([image_cap(page=3), image_cap(page=4)], etype="image")
+    ex = make_extract(
+        [image_cap(page=3), image_cap(page=4)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
+    )
     assert preview_for_extract(ex) == "pp. 4–5"
 
 
 def test_preview_image_only_non_contiguous_pages_listed():
-    ex = make_extract([image_cap(page=0), image_cap(page=4)], etype="image")
+    ex = make_extract(
+        [image_cap(page=0), image_cap(page=4)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
+    )
     assert preview_for_extract(ex) == "pp. 1, 5"
 
 
 def test_preview_all_empty_text_without_images_is_empty_marker():
-    ex = make_extract([text_cap("   "), text_cap("")])
+    ex = make_extract([text_cap(), text_cap(page=1)], text_content="   \n\n  ")
     assert preview_for_extract(ex) == "(empty)"
 
 
@@ -578,15 +756,11 @@ def test_preview_combined_with_emptied_text_is_empty_marker_not_pages():
     """Spec AC: an Extract whose text has been emptied shows (empty) —
     even when image Captures remain (only pure image Extracts show pages)."""
     ex = make_extract(
-        [text_cap(""), image_cap(page=5), image_cap(page=6)],
+        [text_cap(), image_cap(page=5), image_cap(page=6)],
         etype="combined",
+        text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
     )
     assert preview_for_extract(ex) == "(empty)"
-
-
-def test_preview_skips_empty_text_and_uses_next_nonempty():
-    ex = make_extract([text_cap(""), text_cap("second capture speaks")])
-    assert preview_for_extract(ex) == "second capture speaks"
 
 
 def test_preview_from_real_store_round_trip(conn):
