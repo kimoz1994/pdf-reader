@@ -460,7 +460,9 @@ class ExtractsView(QWidget):
     def _fill_editor_document(self, edit, extract):
         """Build the one joined document: the blob's text with each image
         Capture rendered inline at its placeholder position, in capture
-        order."""
+        order. Only real placeholders render an image — deleted ones stay
+        deleted (surviving placeholders map to captures in capture
+        order), so an emptied blob builds an empty document."""
         blob = extract.text_content or ""
         images = [c for c in extract.captures if c.kind == "image" and c.image_blob]
         parts = blob.split(IMG_PLACEHOLDER)
@@ -469,7 +471,7 @@ class ExtractsView(QWidget):
         for i, part in enumerate(parts):
             if part:
                 cursor.insertText(part)
-            if i < len(images):
+            if i < len(parts) - 1 and i < len(images):
                 cursor.insertImage(self._image_format(edit.document(), images[i], i))
 
     def _image_format(self, doc, cap, index):

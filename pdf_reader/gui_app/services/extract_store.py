@@ -209,9 +209,10 @@ def preview_for_extract(extract: Extract) -> str:
 
     First text chunk of the Extract's blob (whitespace-normalised,
     placeholders stripped, truncated to ~60 characters with an ellipsis).
-    Image-only Extracts fall back to their page span (`p. 4`, `pp. 4–5`,
-    `pp. 1, 5`); a text-bearing Extract whose blob has no text shows
-    `(empty)`. Derived at render time — never persisted.
+    With no text: image placeholders present → the page span (`p. 4`,
+    `pp. 4–5`, `pp. 1, 5`); none → `(empty)` — deleting an image from
+    the document deletes it (Capture anchors stay). Derived at render
+    time — never persisted.
     """
     blob = extract.text_content or ""
     for part in blob.split(_BLOB_SEP):
@@ -222,6 +223,10 @@ def preview_for_extract(extract: Extract) -> str:
             return snippet
 
     if any(c.kind == "text" for c in extract.captures):
+        return "(empty)"
+    if IMG_PLACEHOLDER not in blob:
+        # Images are deletable from the document: a pure image Extract
+        # whose placeholders are all gone displays nothing.
         return "(empty)"
 
     pages = sorted({c.page + 1 for c in extract.captures if c.kind == "image"})
@@ -318,17 +323,15 @@ def capture_overlaps_extract(
 
 
 def _normalize_blob(text: str, image_count: int) -> str:
-    """Reconcile the blob's placeholder count with the Extract's image
-    Captures: missing placeholders are appended at the end (images can
-    never be removed — deleting one relocates it), extras are stripped
-    from the end."""
+    """Reconcile the blob's placeholders with the Extract's image
+    Captures: unbacked extras (pasted from the clipboard) are stripped
+    from the end, while a deleted placeholder stays deleted — the
+    Extract may display any subset of its image Captures, including
+    none (the Capture rows remain as immutable page anchors)."""
     count = text.count(IMG_PLACEHOLDER)
     if image_count == 0:
         return text.replace(IMG_PLACEHOLDER, "")
-    if count < image_count:
-        missing = _BLOB_SEP.join([IMG_PLACEHOLDER] * (image_count - count))
-        text = f"{text}{_BLOB_SEP}{missing}" if text.strip() else missing
-    elif count > image_count:
+    if count > image_count:
         for _ in range(count - image_count):
             idx = text.rfind(IMG_PLACEHOLDER)
             text = text[:idx] + text[idx + 1 :]
@@ -339,11 +342,12 @@ def _normalize_blob(text: str, image_count: int) -> str:
 def save_extract_text(conn, extract_id: int, text: str) -> bool:
     """Persist an Extract's whole text blob (the joined editor document).
 
-    The placeholder count is normalized to the Extract's image Captures:
-    images are immutable — a deleted placeholder is re-appended at the
-    end, extras are dropped. Empty and whitespace-only blobs are allowed:
-    content and existence are independent. Returns False only when the
-    Extract itself does not exist.
+    Unbacked placeholders (pasted from the clipboard) are stripped; a
+    deleted placeholder stays deleted — an emptied Extract persists as
+    empty while its Capture rows remain as anchors. Empty and
+    whitespace-only blobs are allowed: content and existence are
+    independent. Returns False only when the Extract itself does not
+    exist.
     """
     exists = conn.execute(
         "SELECT 1 FROM extracts WHERE id = ?", (extract_id,)
