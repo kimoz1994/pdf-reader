@@ -92,7 +92,7 @@ class _ExtractDocEdit(QTextEdit):
                 background: transparent;
                 border: none;
                 color: #1a1a1a;
-                font-size: 15px;
+                font-size: 17px;
             }
             """
         )
@@ -583,14 +583,31 @@ class ExtractsView(QWidget):
             return
         self.jump_requested.emit(dict(data))
 
-    def delete_selected(self):
-        """Delete the selected Extract after a confirmation popup."""
-        item = self.tree.currentItem()
+    def _extract_id_for_item(self, item):
+        """The Extract id owning `item` — the Extract row itself or one
+        of its image Capture rows; None for Document rows / no
+        selection. Same resolution `_open_editor` uses."""
         if item is None:
-            return
+            return None
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-        extract_id = data.get("extract_id")
+        if data.get("extract_id") is None:
+            parent = item.parent()
+            data = (parent.data(0, Qt.ItemDataRole.UserRole) or {}) if parent else {}
+        return data.get("extract_id")
+
+    def delete_selected(self):
+        """Delete the selected Extract after a confirmation popup.
+
+        An image Capture row selects its owning Extract (Captures are
+        anchors — they go only with it). Document rows and empty
+        selections get a hint popup instead of a silent no-op."""
+        extract_id = self._extract_id_for_item(self.tree.currentItem())
         if extract_id is None:
+            QMessageBox.information(
+                self,
+                "Delete Extract",
+                "Select an Extract row (or one of its image captures) to delete.",
+            )
             return
         conn = self._db_conn()
         if conn is None:

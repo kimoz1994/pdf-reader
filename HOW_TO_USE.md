@@ -74,7 +74,7 @@ Mouse works too — scroll and click as usual.
    - `Extract #2 — text (3 captures)` means “3 pieces captured together”.
    - Each Extract row **previews its content**: the opening of its first text (e.g. `…: The mitochondria is the powerhou…`), the page span for image-only extracts (`…: pp. 4–5`), or `(empty)` — so you know what's inside before opening it.
 3. **Read and edit an Extract full-page**: select an Extract row — or any image Capture inside it — and press **Enter** (or double-click). The whole view becomes the **Extract Editor**: the group's text and images as **ONE continuous document** — a single editable surface where the cursor flows across capture boundaries, with images sitting inline between text (type before, after and around them; deleting an image's placeholder removes that image from the document on save — its Capture stays as the blue anchor, so blue redraw and ↱ Jump are unaffected). `Ctrl+Z` undoes across the whole Extract. Click **💾 Save** to persist without leaving, or just press **← Back**: it auto-saves and returns you to the tree with the same row still selected, the preview showing your edited text (or `(empty)` if you emptied it). You can even empty the whole document — the Extract stays in the tree.
-4. **Delete an Extract**: select it and click **🗑️ Delete Selected** (you'll be asked to confirm). In the reader, the shortcut is **`d` twice**.
+4. **Delete an Extract**: select it — or any image Capture inside it — and click **🗑️ Delete Selected** (you'll be asked to confirm; the whole Extract goes). A Document row (or no selection) pops a hint instead. In the reader, the shortcut is **`d` twice**.
 
 ### 5. Jump back to where it came from
 
@@ -105,7 +105,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extracts view | Read / edit an Extract | select row → `Enter` / double-click → type → **💾 Save** / **← Back** |
 | Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
-| Extracts view | Delete an Extract | select → 🗑️ Delete Selected (confirm) |
+| Extracts view | Delete an Extract | select it (or an image capture in it) → 🗑️ Delete Selected (confirm) |
 | Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
 
 ---
