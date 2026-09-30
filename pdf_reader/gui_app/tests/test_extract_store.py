@@ -10,6 +10,7 @@ from services.extract_store import (
     commit_working_set,
     delete_extract,
     display_title,
+    displayed_image_count,
     init_schema,
     list_docs_with_extracts,
     list_extracts_for_doc,
@@ -808,6 +809,69 @@ def test_preview_from_real_store_round_trip(conn):
     )
     ex = list_extracts_for_doc(conn, doc_id)[0]
     assert preview_for_extract(ex) == "from the db"
+
+
+def test_displayed_image_count_full_blob_displays_all():
+    ex = make_extract(
+        [image_cap(page=1), image_cap(page=2)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
+    )
+    assert displayed_image_count(ex) == 2
+
+
+def test_displayed_image_count_deleted_placeholder_stays_deleted():
+    """(#34) placeholders are never re-added: a blob saved with one
+    placeholder displays only the first image Capture in capture order."""
+    ex = make_extract(
+        [image_cap(page=1), image_cap(page=2)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER,
+    )
+    assert displayed_image_count(ex) == 1
+
+
+def test_displayed_image_count_emptied_blob_displays_none():
+    ex = make_extract(
+        [image_cap(page=1), image_cap(page=2)],
+        etype="image",
+        text_content="",
+    )
+    assert displayed_image_count(ex) == 0
+
+
+def test_displayed_image_count_null_blob_displays_none():
+    ex = make_extract([image_cap(page=1)], etype="image", text_content=None)
+    assert displayed_image_count(ex) == 0
+
+
+def test_displayed_image_count_never_exceeds_image_captures():
+    """Unbacked placeholders are display noise (stripped on save); the
+    count can never exceed the image Captures actually available."""
+    ex = make_extract(
+        [image_cap(page=1)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER + "\n\n" + IMG_PLACEHOLDER,
+    )
+    assert displayed_image_count(ex) == 1
+
+
+def test_displayed_image_count_from_real_store_round_trip(conn):
+    """The display rule works on Extracts as read back from the store,
+    including after an edit deleted one placeholder."""
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="t"),
+            Capture(page=1, rect=(0, 0, 1, 1), kind="image", image_blob=b"\x89PNG"),
+            Capture(page=2, rect=(0, 0, 1, 1), kind="image", image_blob=b"\x89PNG"),
+        ],
+    )
+    assert displayed_image_count(list_extracts_for_doc(conn, doc_id)[0]) == 2
+    save_extract_text(conn, eid, "t" + "\n\n" + IMG_PLACEHOLDER)
+    assert displayed_image_count(list_extracts_for_doc(conn, doc_id)[0]) == 1
 
 
 def _make_pdf(path, title=None):
