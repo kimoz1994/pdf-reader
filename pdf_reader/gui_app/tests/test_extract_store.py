@@ -771,6 +771,28 @@ def test_preview_image_only_non_contiguous_pages_listed():
     assert preview_for_extract(ex) == "pp. 1, 5"
 
 
+def test_preview_page_span_shrinks_when_image_deleted_from_document():
+    """(#44) the span covers the images still displayed — a deleted
+    placeholder shrinks a multi-page span (anchors stay but count out)."""
+    ex = make_extract(
+        [image_cap(page=0), image_cap(page=4)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER,
+    )
+    assert preview_for_extract(ex) == "p. 1"
+
+
+def test_preview_same_page_partial_delete_keeps_span():
+    """Images sharing a page: partial deletion cannot shrink a page-span
+    preview (the remaining image is on the same page) — accepted blur."""
+    ex = make_extract(
+        [image_cap(page=34), image_cap(page=34)],
+        etype="image",
+        text_content=IMG_PLACEHOLDER,
+    )
+    assert preview_for_extract(ex) == "p. 35"
+
+
 def test_preview_image_only_with_all_images_deleted_is_empty_marker():
     """Images are deletable from the document (#34): a pure image Extract
     whose placeholders are all gone previews (empty) — the Capture

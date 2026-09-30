@@ -210,8 +210,10 @@ def preview_for_extract(extract: Extract) -> str:
     First text chunk of the Extract's blob (whitespace-normalised,
     placeholders stripped, truncated to ~60 characters with an ellipsis).
     With no text: image placeholders present → the page span (`p. 4`,
-    `pp. 4–5`, `pp. 1, 5`); none → `(empty)` — deleting an image from
-    the document deletes it (Capture anchors stay). Derived at render
+    `pp. 4–5`, `pp. 1, 5`) of the images still displayed — a deleted
+    placeholder shrinks a multi-page span (#44); none → `(empty)` —
+    deleting an image from the document deletes it (Capture anchors
+    stay). Derived at render
     time — never persisted.
     """
     blob = extract.text_content or ""
@@ -229,7 +231,8 @@ def preview_for_extract(extract: Extract) -> str:
         # whose placeholders are all gone displays nothing.
         return "(empty)"
 
-    pages = sorted({c.page + 1 for c in extract.captures if c.kind == "image"})
+    images = [c for c in extract.captures if c.kind == "image" and c.image_blob]
+    pages = sorted({c.page + 1 for c in images[: displayed_image_count(extract)]})
     if not pages:
         return "(empty)"
     if len(pages) == 1:
