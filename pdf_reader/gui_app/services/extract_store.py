@@ -239,6 +239,18 @@ def preview_for_extract(extract: Extract) -> str:
     return "pp. " + ", ".join(str(p) for p in pages)
 
 
+def displayed_image_count(extract: Extract) -> int:
+    """How many of the Extract's image Captures the document displays.
+
+    The blob's surviving placeholders map to image Captures in capture
+    order — the same rule `_fill_editor_document` renders by — so the
+    first `count` image Captures are in the document and the rest have
+    been deleted from it; their anchor rows may be shown as such (#42).
+    """
+    images = [c for c in extract.captures if c.kind == "image" and c.image_blob]
+    return min((extract.text_content or "").count(IMG_PLACEHOLDER), len(images))
+
+
 def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
     """(doc_id, name, path) for Documents that have at least one Extract.
 
