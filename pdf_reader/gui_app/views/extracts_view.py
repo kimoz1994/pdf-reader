@@ -2,7 +2,7 @@
 Extracts View — browse captured material.
 
 Shows the library's Documents, each expandable into its Extracts
-(newest-first), and each Extract into its image Captures. Activating a
+(newest-first) — ONE row per Extract (#44). Activating a row swaps the tree
 row swaps the tree for the full-area Extract Editor: ONE continuous
 document — the whole Extract as a single editable surface where the
 cursor flows across old capture boundaries and image Captures sit
@@ -44,7 +44,6 @@ from services.extract_store import (
     IMG_PLACEHOLDER,
     delete_extract,
     display_title,
-    displayed_image_count,
     list_docs_with_extracts,
     list_extracts_for_doc,
     preview_for_extract,
@@ -60,24 +59,6 @@ def _extract_label(extract) -> str:
         f"({count} capture{'s' if count != 1 else ''})"
     )
     return f"{base}: {preview_for_extract(extract)}"
-
-
-_IN_DOCUMENT_COLOR = QColor("#ecf0f1")
-_REMOVED_ANCHOR_COLOR = QColor("#7f8c8d")
-
-
-def _capture_row_text(cap, in_document: bool) -> str:
-    """Label for one image Capture row. Anchors whose placeholder was
-    deleted from the document stay listed — Captures are immutable —
-    but are dimmed and marked, so the tree mirrors the document (#42)."""
-    base = f"🖼️ Image — page {cap.page + 1}"
-    return base if in_document else f"{base} (not in document)"
-
-
-def _style_capture_item(item, in_document: bool) -> None:
-    item.setForeground(
-        0, QBrush(_IN_DOCUMENT_COLOR if in_document else _REMOVED_ANCHOR_COLOR)
-    )
 
 
 class _ExtractDocEdit(QTextEdit):
@@ -320,7 +301,7 @@ class ExtractsView(QWidget):
         layout.addWidget(self.editor_page)
 
     def refresh(self):
-        """Reload the Document -> Extract -> Capture hierarchy."""
+        """Reload the Document -> Extract hierarchy (one row per Extract)."""
         if self._editor_open:
             # Re-entering via the sidebar refreshes the view while the
             # editor is open; close first so Back never targets tree
@@ -367,27 +348,10 @@ class ExtractsView(QWidget):
                     },
                 )
                 ex_item.setForeground(1, QBrush(QColor("#3498db")))
-                in_document = displayed_image_count(extract)
-                for image_index, cap in enumerate(
-                    c for c in extract.captures
-                    if c.kind == "image" and c.image_blob
-                ):
-                    # No thumbnail icon: at row height it was an
-                    # illegible (often blank-white) rectangle. Text
-                    # captures get no rows — the blob preview on the
-                    # Extract row is their single source of truth.
-                    shown = image_index < in_document
-                    cap_item = QTreeWidgetItem([_capture_row_text(cap, shown)])
-                    _style_capture_item(cap_item, shown)
-                    cap_item.setData(
-                        0, Qt.ItemDataRole.UserRole,
-                        {
-                            "capture_id": cap.id,
-                            "kind": cap.kind,
-                            "page": cap.page,
-                        },
-                    )
-                    ex_item.addChild(cap_item)
+                # One row per Extract (#44): the label's capture count and
+                # preview already carry the composition — per-image anchor
+                # rows read as duplicated content. Captures stay fully
+                # visible in the editor and as blue anchors in the reader.
                 doc_item.addChild(ex_item)
             doc_item.setExpanded(True)
             self.tree.addTopLevelItem(doc_item)
@@ -401,17 +365,18 @@ class ExtractsView(QWidget):
         self._jump_from_item(item)
 
     def _on_item_activated(self, item, column):
-        """Enter/double-click: the ↱ column still jumps; every other row
-        (Extract or image Capture) opens the full-area Extract Editor."""
+        """Enter/double-click: the ↱ column still jumps; any other row
+        opens the full-area Extract Editor."""
         if column == 1:
             self._jump_from_item(item)
             return
         self._open_editor(item)
 
     def _open_editor(self, item):
-        """Open the editor for the Extract owning `item` — either the
-        Extract row itself or one of its image Capture rows. Document
-        rows are a no-op (they own no single Extract)."""
+        """Open the editor for the Extract owning `item`. Document rows
+        are a no-op (they own no single Extract). The parent fallback
+        for capture rows is dormant since the tree shows one row per
+        Extract (#44) — kept as defense."""
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}
         if data.get("extract_id") is None:
             parent = item.parent()
@@ -567,17 +532,6 @@ class ExtractsView(QWidget):
         if extract is None:
             return
         ex_item.setText(0, _extract_label(extract))
-        # Capture rows restyle too: which anchors are in the document
-        # changed with this save (deleted placeholders stay deleted).
-        children = [ex_item.child(j) for j in range(ex_item.childCount())]
-        image_caps = [
-            c for c in extract.captures if c.kind == "image" and c.image_blob
-        ]
-        in_document = displayed_image_count(extract)
-        for image_index, (cap_item, cap) in enumerate(zip(children, image_caps)):
-            shown = image_index < in_document
-            cap_item.setText(0, _capture_row_text(cap, shown))
-            _style_capture_item(cap_item, shown)
 
     def _close_editor(self):
         """Back: auto-save pending edits, hide the editor, restore the tree
