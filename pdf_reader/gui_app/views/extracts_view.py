@@ -61,6 +61,13 @@ def _extract_label(extract) -> str:
     return f"{base}: {preview_for_extract(extract)}"
 
 
+# Display band for inline images in the Extract Editor (#46): sources
+# narrower than the floor upscale to it (capped captures are 1x DPI and
+# read tiny otherwise), wider than the cap downscale. Aspect kept.
+_IMG_MIN_W = 480
+_IMG_MAX_W = 860
+
+
 class _ExtractDocEdit(QTextEdit):
     """The whole Extract as ONE editable document inside the Extract
     Editor.
@@ -464,12 +471,17 @@ class ExtractsView(QWidget):
 
     def _image_format(self, doc, cap, index):
         """Inline image format for one Capture: decoded PNG registered as
-        a document resource, scaled down to at most 720px wide."""
+        a document resource, displayed within the size band
+        (_IMG_MIN_W.._IMG_MAX_W, aspect kept): small captures upscale to
+        the floor so they read at a comfortable size next to the note
+        text (#46), oversized sources downscale to the cap."""
         image = QImage.fromData(cap.image_blob)
-        if not image.isNull() and image.width() > 720:
-            image = image.scaledToWidth(
-                720, Qt.TransformationMode.SmoothTransformation
-            )
+        if not image.isNull():
+            target = min(max(image.width(), _IMG_MIN_W), _IMG_MAX_W)
+            if target != image.width():
+                image = image.scaledToWidth(
+                    target, Qt.TransformationMode.SmoothTransformation
+                )
         url = f"capimg://{index}"
         doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl(url), image)
         fmt = QTextImageFormat()
