@@ -26,7 +26,7 @@ Rendering rule: `blue` once extracted.
 Note the shift: a Highlight *becomes* an Extract — they are the same PDF region at two life stages (transient yellow → persisted blue), not two different kinds of thing.
 
 ### Capture
-An individual snippet inside an Extract (one text region or one image region). An Extract is composed of one or more Captures taken together.
+An individual snippet inside an Extract (one text region or one image region). An Extract is composed of one or more Captures taken together. Image regions rasterize at 2× PDF scale (sharp captures; the anchor geometry stays in PDF points).
 
 ### Extracts View
 The screen where the user reviews extracted material. Shows a hierarchical list: the library's **Documents**, each expandable (`+`) into its **Extracts** (each row previewing a snippet of its content). Opening an Extract replaces the list with the **Extract Editor**; closing it returns to the list.
