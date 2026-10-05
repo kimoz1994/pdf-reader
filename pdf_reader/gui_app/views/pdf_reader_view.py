@@ -244,6 +244,12 @@ class SearchHighlightOverlay(QWidget):
             )
 
 
+# Rasterization zoom for image click-captures (#36): the default
+# 1x matrix renders 1px per PDF point — visibly pixelated once the
+# editor's display band grows them. Geometry anchors are untouched.
+_CAPTURE_SCALE = 2.0
+
+
 class PDFReaderView(QWidget):
     back_requested = pyqtSignal()
     progress_changed = pyqtSignal(str, int)
@@ -516,13 +522,18 @@ class PDFReaderView(QWidget):
         return self._mupdf_doc
 
     def _render_image_png(self, page_index: int, rect) -> bytes | None:
-        """Render a PDF-space rect on a page to a PNG blob."""
+        """Render a PDF-space rect on a page to a PNG blob at
+        _CAPTURE_SCALE× so captures are sharp (#36). The rect anchor
+        stays PDF-space — only the rasterization zoom changes; existing
+        captures keep their old blobs (immutable)."""
         try:
             doc = self._mupdf_doc_handle()
             if doc is None:
                 return None
             page = doc[page_index]
-            pix = page.get_pixmap(clip=rect)
+            pix = page.get_pixmap(
+                clip=rect, matrix=pymupdf.Matrix(_CAPTURE_SCALE, _CAPTURE_SCALE)
+            )
             return pix.tobytes("png")
         except Exception as e:
             print(f"Image render error: {e}")
