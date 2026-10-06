@@ -51,6 +51,18 @@ from services.extract_store import (
 )
 
 
+def _doc_label(path, name, doc_id) -> str:
+    """Doc-tree title, marked when the source is gone: the pdfs row was
+    removed (path None) or the file is missing on disk (#17). Extracts
+    themselves stay readable either way — content lives in the DB."""
+    if path is None:
+        return f"⚠ Removed source (doc #{doc_id})"
+    title = display_title(path, name or "")
+    if not Path(path).exists():
+        return f"{title} ⚠ file missing"
+    return title
+
+
 def _extract_label(extract) -> str:
     """Tree row label: identity + live content preview."""
     count = len(extract.captures)
@@ -62,7 +74,7 @@ def _extract_label(extract) -> str:
 
 
 # Display band for inline images in the Extract Editor (#46): sources
-# narrower than the floor upscale to it (capped captures are 1x DPI and
+# narrower than the floor upscale to it (pre-#36 captures are 1x DPI and
 # read tiny otherwise), wider than the cap downscale. Aspect kept.
 _IMG_MIN_W = 480
 _IMG_MAX_W = 860
@@ -326,8 +338,6 @@ class ExtractsView(QWidget):
         doc_ids = list_docs_with_extracts(conn)
         rows = []
         for doc_id, name, path in doc_ids:
-            if not Path(path).exists():
-                continue
             extracts = list_extracts_for_doc(conn, doc_id)
             rows.append((name, path, doc_id, extracts))
 
@@ -339,7 +349,7 @@ class ExtractsView(QWidget):
         self.tree.show()
 
         for name, path, doc_id, extracts in rows:
-            doc_item = QTreeWidgetItem([display_title(path, name)])
+            doc_item = QTreeWidgetItem([_doc_label(path, name, doc_id)])
             doc_item.setData(0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id})
             for extract in extracts:
                 first_cap = extract.captures[0] if extract.captures else None
@@ -579,7 +589,9 @@ class ExtractsView(QWidget):
 
     def _jump_from_item(self, item):
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-        if data.get("page") is None or not data.get("path"):
+        if data.get("page") is None:
+            # path may be None for a removed source — MainWindow's
+            # on_extract_jump raises the "PDF Removed" warning (#17).
             return
         self.jump_requested.emit(dict(data))
 

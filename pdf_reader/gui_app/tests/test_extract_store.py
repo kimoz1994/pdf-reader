@@ -206,8 +206,9 @@ def test_list_docs_with_extracts(conn):
     assert all(d[0] != doc_b for d in docs)
 
 
-def test_list_docs_with_extracts_only_when_pdf_row_exists(conn):
-    """A cap with no library row (PDF removed) is hidden, per design."""
+def test_list_docs_with_extracts_survives_pdf_row_removal(conn):
+    """Extracts stay listed after the pdfs row is deleted (Q3/r5, #17);
+    name/path come back None so the view can mark a removed source."""
     doc_a = seed_pdf(conn, "/tmp/a.pdf", "a.pdf")
     doc_b = seed_pdf(conn, "/tmp/b.pdf", "b.pdf")
     commit_working_set(conn, doc_a, [Capture(0, (0, 0, 1, 1), "text", "a minute")])
@@ -216,7 +217,8 @@ def test_list_docs_with_extracts_only_when_pdf_row_exists(conn):
     conn.commit()
 
     docs = list_docs_with_extracts(conn)
-    assert [d[0] for d in docs] == [doc_a]
+    assert (doc_a, "a.pdf", "/tmp/a.pdf") in docs
+    assert (doc_b, None, None) in docs
 
 
 def test_list_extracts_for_doc_newest_first(conn):
