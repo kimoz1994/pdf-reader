@@ -33,6 +33,8 @@ class Capture:
     text_content: Optional[str] = None  # kind='text'
     image_blob: Optional[bytes] = None  # kind='image', PNG
     id: Optional[int] = None  # DB row id (set when read back from the store)
+    display_w: Optional[int] = None  # presentation width in px (NULL = auto
+    # band #46); page/rect geometry anchors stay immutable (#37)
 
 
 @dataclass
@@ -49,10 +51,11 @@ class Extract:
 def init_schema(conn) -> None:
     """Create the extracts/captures tables idempotently.
 
-    Also migrates pre-blob databases once: adds `extracts.text_content`,
-    backfills it from legacy per-capture text (capture id order, images
-    as placeholders), then NULLs the per-capture text — captures are
-    anchors from here on. Idempotent via a column-existence check.
+    Also migrates old databases once: adds `extracts.text_content`
+    (pre-blob backfill: per-capture text joined in capture-id order,
+    images as placeholders, then the per-capture text NULLed — captures
+    are anchors from here on) and adds `captures.display_w` (nullable
+    presentation width, #37). Idempotent via column-existence checks.
     """
     conn.execute(
         """
@@ -74,7 +77,8 @@ def init_schema(conn) -> None:
             rect TEXT NOT NULL,
             kind TEXT NOT NULL,
             text_content TEXT,
-            image_blob BLOB
+            image_blob BLOB,
+            display_w INTEGER
         )
         """
     )
@@ -97,6 +101,9 @@ def init_schema(conn) -> None:
                 (_BLOB_SEP.join(elements), eid),
             )
         conn.execute("UPDATE captures SET text_content = NULL WHERE kind = 'text'")
+    cap_cols = {r[1] for r in conn.execute("PRAGMA table_info(captures)").fetchall()}
+    if "display_w" not in cap_cols:
+        conn.execute("ALTER TABLE captures ADD COLUMN display_w INTEGER")
     conn.commit()
 
 
@@ -178,7 +185,8 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
     for eid, edoc, etype, blob in extract_rows:
         cap_rows = conn.execute(
             """
-            SELECT id, page, rect, kind, text_content, image_blob FROM captures
+            SELECT id, page, rect, kind, text_content, image_blob, display_w
+            FROM captures
             WHERE extract_id = ?
             ORDER BY id ASC
             """,
@@ -192,8 +200,9 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
                 kind=kind,
                 text_content=text_content,
                 image_blob=image_blob,
+                display_w=display_w,
             )
-            for cap_id, page, rect, kind, text_content, image_blob in cap_rows
+            for cap_id, page, rect, kind, text_content, image_blob, display_w in cap_rows
         ]
         extracts.append(
             Extract(id=eid, doc_id=edoc, type=etype, captures=captures, text_content=blob)
@@ -252,6 +261,17 @@ def displayed_image_count(extract: Extract) -> int:
     """
     images = [c for c in extract.captures if c.kind == "image" and c.image_blob]
     return min((extract.text_content or "").count(IMG_PLACEHOLDER), len(images))
+
+
+def set_capture_display_w(conn, capture_id: int, width: Optional[int]) -> None:
+    """Presentation-only display width for an image Capture (#37): NULL
+    means the auto size band (#46). The page/rect geometry anchors and
+    the blob are untouched — resize never re-renders the capture."""
+    conn.execute(
+        "UPDATE captures SET display_w = ? WHERE id = ?",
+        (width, capture_id),
+    )
+    conn.commit()
 
 
 def list_docs_with_extracts(conn) -> List[Tuple[int, Optional[str], Optional[str]]]:

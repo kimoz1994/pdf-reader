@@ -28,15 +28,18 @@ from PyQt6.QtWidgets import (
     QFrame,
     QTextEdit,
     QSizePolicy,
+    QMenu,
 )
 from PyQt6.QtCore import Qt, QItemSelectionModel, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
     QImage,
+    QAction,
     QTextCursor,
     QTextDocument,
     QTextImageFormat,
+    QTextFormat,
     QTextOption,
 )
 
@@ -48,6 +51,7 @@ from services.extract_store import (
     list_extracts_for_doc,
     preview_for_extract,
     save_extract_text,
+    set_capture_display_w,
 )
 
 
@@ -78,6 +82,11 @@ def _extract_label(extract) -> str:
 # read tiny otherwise), wider than the cap downscale. Aspect kept.
 _IMG_MIN_W = 480
 _IMG_MAX_W = 860
+# Explicit resize bounds and step for the editor's image sizing (#37):
+# Bigger/Smaller move by _RESIZE_STEP px; values outside [MIN, MAX] clamp.
+_IMG_W_MIN = 100
+_IMG_W_MAX = 4000
+_RESIZE_STEP = 60
 
 
 class _ExtractDocEdit(QTextEdit):
@@ -95,6 +104,9 @@ class _ExtractDocEdit(QTextEdit):
     real pixels; always recalculating for the live width keeps long
     documents fully visible instead of clipped.
     """
+
+    # (image index, new width in px; None = reset to the auto band).
+    resize_requested = pyqtSignal(int, object)
 
     def __init__(self):
         super().__init__()
@@ -134,6 +146,85 @@ class _ExtractDocEdit(QTextEdit):
         height = int(doc.size().height()) + self.frameWidth() * 2
         if self.height() != height:
             self.setFixedHeight(height)
+
+    def _image_index_at_cursor(self, cursor):
+        """Image-list index of the image at the cursor or immediately
+        before it (the checks cover both charFormat() conventions), else
+        None. The document's image URLs are capimg://<index> (#37)."""
+        for pos in (cursor.position(), cursor.position() - 1):
+            if pos < 0:
+                continue
+            probe = QTextCursor(self.document())
+            probe.setPosition(pos)
+            fmt = probe.charFormat()
+            if fmt.isImageFormat():
+                name = fmt.property(QTextFormat.Property.ImageName)
+                if isinstance(name, str) and name.startswith("capimg://"):
+                    try:
+                        return int(name[len("capimg://"):])
+                    except ValueError:
+                        return None
+        return None
+
+    def _rendered_width(self, index):
+        """Currently displayed width (px) of image `index`, from its
+        document resource — already band-clamped or user-sized."""
+        img = self.document().resource(
+            QTextDocument.ResourceType.ImageResource, QUrl(f"capimg://{index}")
+        )
+        if isinstance(img, QImage) and not img.isNull():
+            return img.width()
+        return None
+
+    def _emit_resize(self, index, delta):
+        cur = self._rendered_width(index)
+        if cur is None:
+            return
+        self.resize_requested.emit(
+            index, min(max(cur + delta, _IMG_W_MIN), _IMG_W_MAX)
+        )
+
+    def _image_resize_actions(self, index):
+        """Bigger/Smaller/Reset actions for one image (#37): presentation
+        only — the view persists display_w and re-renders in place."""
+        bigger = QAction("Bigger  (+)", self)
+        bigger.triggered.connect(lambda: self._emit_resize(index, _RESIZE_STEP))
+        smaller = QAction("Smaller  (-)", self)
+        smaller.triggered.connect(lambda: self._emit_resize(index, -_RESIZE_STEP))
+        reset = QAction("Reset to auto size", self)
+        reset.triggered.connect(lambda: self.resize_requested.emit(index, None))
+        return [bigger, smaller, reset]
+
+    def contextMenuEvent(self, event):
+        index = self._image_index_at_cursor(self.cursorForPosition(event.pos()))
+        if index is None:
+            super().contextMenuEvent(event)
+            return
+        menu = self.createStandardContextMenu(event.globalPos())
+        menu.addSeparator()
+        menu.addActions(self._image_resize_actions(index))
+        menu.exec(event.globalPos())
+
+    def keyPressEvent(self, event):
+        """+/- resize the adjacent image instead of typing — only when the
+        cursor sits on/next to an image and nothing is selected; text
+        edits keep their literal +/- as before (#37)."""
+        key = event.key()
+        bigger = key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal)
+        smaller = key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore)
+        if (bigger or smaller) and not (
+            event.modifiers()
+            & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+        ):
+            cursor = self.textCursor()
+            if not cursor.hasSelection():
+                index = self._image_index_at_cursor(cursor)
+                if index is not None:
+                    self._emit_resize(
+                        index, _RESIZE_STEP if bigger else -_RESIZE_STEP
+                    )
+                    return
+        super().keyPressEvent(event)
 
 
 class ExtractsView(QWidget):
@@ -236,6 +327,8 @@ class ExtractsView(QWidget):
         self._editor_extract_id = None
         self._editor_doc_id = None
         self._editor_doc_edit = None
+        self._editor_images = []  # image Captures rendered in the editor (#37)
+        self._suppress_dirty = False  # format-only changes keep Save off
 
         self.setLayout(layout)
         self.refresh()
@@ -448,6 +541,7 @@ class ExtractsView(QWidget):
         self._fill_editor_document(edit, extract)
         # Connected after the fill: building the document is not an edit.
         edit.textChanged.connect(self._mark_dirty)
+        edit.resize_requested.connect(self._on_image_resize)
         self.editor_layout.addWidget(edit)
         self._editor_doc_edit = edit
         self.editor_layout.addStretch()
@@ -470,6 +564,7 @@ class ExtractsView(QWidget):
         order), so an emptied blob builds an empty document."""
         blob = extract.text_content or ""
         images = [c for c in extract.captures if c.kind == "image" and c.image_blob]
+        self._editor_images = images  # index -> capimg://<i> (#37)
         parts = blob.split(IMG_PLACEHOLDER)
         cursor = edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)
@@ -481,13 +576,17 @@ class ExtractsView(QWidget):
 
     def _image_format(self, doc, cap, index):
         """Inline image format for one Capture: decoded PNG registered as
-        a document resource, displayed within the size band
+        a document resource, displayed at the capture's explicit
+        display_w when set (#37), else within the size band
         (_IMG_MIN_W.._IMG_MAX_W, aspect kept): small captures upscale to
         the floor so they read at a comfortable size next to the note
         text (#46), oversized sources downscale to the cap."""
         image = QImage.fromData(cap.image_blob)
         if not image.isNull():
-            target = min(max(image.width(), _IMG_MIN_W), _IMG_MAX_W)
+            if cap.display_w:
+                target = min(max(int(cap.display_w), _IMG_W_MIN), _IMG_W_MAX)
+            else:
+                target = min(max(image.width(), _IMG_MIN_W), _IMG_MAX_W)
             if target != image.width():
                 image = image.scaledToWidth(
                     target, Qt.TransformationMode.SmoothTransformation
@@ -501,8 +600,63 @@ class ExtractsView(QWidget):
             fmt.setHeight(float(image.height()))
         return fmt
 
+    def _on_image_resize(self, index, width):
+        """(Re)size an inline image from the context menu or +/- keys:
+        persist the presentation width (None = auto band) and re-render
+        it in place. Text is byte-identical so Save stays off (#37)."""
+        if (
+            not self._editor_open
+            or self._editor_doc_edit is None
+            or not (0 <= index < len(self._editor_images))
+        ):
+            return
+        cap = self._editor_images[index]
+        if width is not None:
+            width = min(max(int(width), _IMG_W_MIN), _IMG_W_MAX)
+            if width == cap.display_w:
+                return
+        elif cap.display_w is None:
+            return
+        conn = self._db_conn()
+        if conn is None:
+            return
+        set_capture_display_w(conn, cap.id, width)
+        cap.display_w = width
+        self._suppress_dirty = True
+        try:
+            self._re_render_image(index, cap)
+        finally:
+            self._suppress_dirty = False
+
+    def _re_render_image(self, index, cap):
+        """Swap image `index` in place: register the newly sized pixmap
+        under its capimg:// URL and rewrite the format on the single
+        document position holding it. Cursor and text untouched."""
+        doc = self._editor_doc_edit.document()
+        fmt = self._image_format(doc, cap, index)
+        url = f"capimg://{index}"
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        while True:
+            cur_fmt = cursor.charFormat()
+            if cur_fmt.isImageFormat() and cur_fmt.property(
+                QTextFormat.Property.ImageName
+            ) == url:
+                # Forward scan first hits the image char itself; select
+                # exactly that one char and swap its format.
+                cursor.setPosition(cursor.position() + 1, QTextCursor.MoveMode.KeepAnchor)
+                cursor.setCharFormat(fmt)
+                return
+            if not cursor.movePosition(QTextCursor.MoveOperation.NextCharacter):
+                return
+
     def _mark_dirty(self):
-        """The document changed: enable Save (Back would auto-save anyway)."""
+        """The document changed: enable Save (Back would auto-save anyway).
+
+        Suppressed while an image resize re-renders (#37): the text blob
+        is byte-identical, so there is nothing for Save to persist."""
+        if self._suppress_dirty:
+            return
         self._editor_dirty = True
         self.save_btn.setEnabled(True)
 
@@ -584,6 +738,8 @@ class ExtractsView(QWidget):
         self._editor_extract_id = None
         self._editor_doc_id = None
         self._editor_doc_edit = None
+        self._editor_images = []  # image Captures rendered in the editor (#37)
+        self._suppress_dirty = False  # format-only changes keep Save off
         self.save_btn.setEnabled(False)
         self.tree.setFocus()
 
