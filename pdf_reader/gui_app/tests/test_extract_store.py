@@ -17,6 +17,7 @@ from services.extract_store import (
     preview_for_extract,
     resolve_doc_id,
     save_extract_text,
+    set_capture_display_w,
 )
 
 
@@ -219,6 +220,54 @@ def test_list_docs_with_extracts_survives_pdf_row_removal(conn):
     docs = list_docs_with_extracts(conn)
     assert (doc_a, "a.pdf", "/tmp/a.pdf") in docs
     assert (doc_b, None, None) in docs
+
+def test_set_capture_display_w_preserves_geometry(conn):
+    """Presentation width round-trips; page/rect anchors untouched (#37)."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(0, (5.0, 6.0, 7.0, 8.0), "image", image_blob=b"png")]
+    )
+    cap = list_extracts_for_doc(conn, doc_id)[0].captures[0]
+    assert cap.display_w is None
+
+    set_capture_display_w(conn, cap.id, 700)
+    cap = list_extracts_for_doc(conn, doc_id)[0].captures[0]
+    assert cap.display_w == 700
+    assert cap.page == 0
+    assert cap.rect == (5.0, 6.0, 7.0, 8.0)
+
+    set_capture_display_w(conn, cap.id, None)
+    assert list_extracts_for_doc(conn, doc_id)[0].captures[0].display_w is None
+
+
+def test_init_schema_migrates_display_w():
+    """Old captures tables (no display_w) gain the column; fresh DBs
+    already have it. Idempotent either way."""
+    c = sqlite3.connect(":memory:")
+    c.execute(
+        """CREATE TABLE extracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            type TEXT NOT NULL
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE captures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            extract_id INTEGER NOT NULL REFERENCES extracts(id) ON DELETE CASCADE,
+            page INTEGER NOT NULL,
+            rect TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            text_content TEXT,
+            image_blob BLOB
+        )"""
+    )
+    init_schema(c)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(captures)").fetchall()}
+    assert "display_w" in cols
+    init_schema(c)  # idempotent: second run is a no-op
+    c.close()
 
 
 def test_list_extracts_for_doc_newest_first(conn):
