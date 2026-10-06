@@ -358,11 +358,12 @@ class MainWindow(QMainWindow):
         path = target.get("path")
         conn = self.db_conn()
         if not path or conn is None or resolve_doc_id(conn, path) is None:
+            where = f"\n\n{path}" if path else ""
             QMessageBox.warning(
                 self,
                 "PDF Removed from Library",
-                "This Extract's PDF is no longer in the library:\n\n"
-                f"{path}\n\nRe-add it to the library to jump to the "
+                "This Extract's PDF is no longer in the library:"
+                f"{where}\n\nRe-add it to the library to jump to the "
                 "original location.",
             )
             return

@@ -254,18 +254,18 @@ def displayed_image_count(extract: Extract) -> int:
     return min((extract.text_content or "").count(IMG_PLACEHOLDER), len(images))
 
 
-def list_docs_with_extracts(conn) -> List[Tuple[int, str, str]]:
+def list_docs_with_extracts(conn) -> List[Tuple[int, Optional[str], Optional[str]]]:
     """(doc_id, name, path) for Documents that have at least one Extract.
 
-    The pdfs join means a Document whose row has been removed (e.g. the PDF
-    was deleted from the library) no longer appears here — matching the
-    library's own "exists on disk" behaviour, by design.
+    LEFT JOIN: Extracts are independent of the PDF (CONTEXT Q3/r5, #17),
+    so a Document whose pdfs row was removed still appears — name and
+    path come back None and the view marks it as a removed source.
     """
     rows = conn.execute(
         """
         SELECT DISTINCT e.doc_id, p.name, p.path
         FROM extracts e
-        JOIN pdfs p ON p.id = e.doc_id
+        LEFT JOIN pdfs p ON p.id = e.doc_id
         ORDER BY e.doc_id
         """
     ).fetchall()
