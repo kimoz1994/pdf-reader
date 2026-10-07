@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QMenu,
 )
-from PyQt6.QtCore import Qt, QItemSelectionModel, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QBuffer, QItemSelectionModel, QIODevice, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -105,8 +105,10 @@ class _ExtractDocEdit(QTextEdit):
     documents fully visible instead of clipped.
     """
 
-    # (image index, new width in px; None = reset to the auto band).
-    resize_requested = pyqtSignal(int, object)
+    # (document resource URL, new width in px; None = auto band).
+    resize_requested = pyqtSignal(str, object)
+    # A clipboard QImage was pasted (#48) — the view inserts + tracks it.
+    pasted_image = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -147,10 +149,11 @@ class _ExtractDocEdit(QTextEdit):
         if self.height() != height:
             self.setFixedHeight(height)
 
-    def _image_index_at_cursor(self, cursor):
-        """Image-list index of the image at the cursor or immediately
-        before it (the checks cover both charFormat() conventions), else
-        None. The document's image URLs are capimg://<index> (#37)."""
+    def _image_url_at_cursor(self, cursor):
+        """Document resource URL of the image at the cursor or
+        immediately before it (the checks cover both charFormat()
+        conventions), else None. capimg:// = a saved capture, paste://
+        = a session-pending pasted image (#37/#48)."""
         for pos in (cursor.position(), cursor.position() - 1):
             if pos < 0:
                 continue
@@ -159,51 +162,61 @@ class _ExtractDocEdit(QTextEdit):
             fmt = probe.charFormat()
             if fmt.isImageFormat():
                 name = fmt.property(QTextFormat.Property.ImageName)
-                if isinstance(name, str) and name.startswith("capimg://"):
-                    try:
-                        return int(name[len("capimg://"):])
-                    except ValueError:
-                        return None
+                if isinstance(name, str) and (
+                    name.startswith("capimg://") or name.startswith("paste://")
+                ):
+                    return name
         return None
 
-    def _rendered_width(self, index):
-        """Currently displayed width (px) of image `index`, from its
-        document resource — already band-clamped or user-sized."""
+    def _rendered_width(self, url):
+        """Currently displayed width (px) of the image under `url`,
+        from its document resource — band-clamped or user-sized."""
         img = self.document().resource(
-            QTextDocument.ResourceType.ImageResource, QUrl(f"capimg://{index}")
+            QTextDocument.ResourceType.ImageResource, QUrl(url)
         )
         if isinstance(img, QImage) and not img.isNull():
             return img.width()
         return None
 
-    def _emit_resize(self, index, delta):
-        cur = self._rendered_width(index)
+    def _emit_resize(self, url, delta):
+        cur = self._rendered_width(url)
         if cur is None:
             return
         self.resize_requested.emit(
-            index, min(max(cur + delta, _IMG_W_MIN), _IMG_W_MAX)
+            url, min(max(cur + delta, _IMG_W_MIN), _IMG_W_MAX)
         )
 
-    def _image_resize_actions(self, index):
+    def _image_resize_actions(self, url):
         """Bigger/Smaller/Reset actions for one image (#37): presentation
         only — the view persists display_w and re-renders in place."""
         bigger = QAction("Bigger  (+)", self)
-        bigger.triggered.connect(lambda: self._emit_resize(index, _RESIZE_STEP))
+        bigger.triggered.connect(lambda: self._emit_resize(url, _RESIZE_STEP))
         smaller = QAction("Smaller  (-)", self)
-        smaller.triggered.connect(lambda: self._emit_resize(index, -_RESIZE_STEP))
+        smaller.triggered.connect(lambda: self._emit_resize(url, -_RESIZE_STEP))
         reset = QAction("Reset to auto size", self)
-        reset.triggered.connect(lambda: self.resize_requested.emit(index, None))
+        reset.triggered.connect(lambda: self.resize_requested.emit(url, None))
         return [bigger, smaller, reset]
 
     def contextMenuEvent(self, event):
-        index = self._image_index_at_cursor(self.cursorForPosition(event.pos()))
-        if index is None:
+        url = self._image_url_at_cursor(self.cursorForPosition(event.pos()))
+        if url is None:
             super().contextMenuEvent(event)
             return
         menu = self.createStandardContextMenu(event.globalPos())
         menu.addSeparator()
-        menu.addActions(self._image_resize_actions(index))
+        menu.addActions(self._image_resize_actions(url))
         menu.exec(event.globalPos())
+
+    def insertFromMimeData(self, source):
+        """Paste: a clipboard image becomes an inline pasted image (#48)
+        — emitted for the view to store and render; anything else falls
+        through to the default (plain-text) paste."""
+        if source.hasImage():
+            image = source.imageData()
+            if isinstance(image, QImage) and not image.isNull():
+                self.pasted_image.emit(image)
+                return
+        super().insertFromMimeData(source)
 
     def keyPressEvent(self, event):
         """+/- resize the adjacent image instead of typing — only when the
@@ -218,10 +231,10 @@ class _ExtractDocEdit(QTextEdit):
         ):
             cursor = self.textCursor()
             if not cursor.hasSelection():
-                index = self._image_index_at_cursor(cursor)
-                if index is not None:
+                url = self._image_url_at_cursor(cursor)
+                if url is not None:
                     self._emit_resize(
-                        index, _RESIZE_STEP if bigger else -_RESIZE_STEP
+                        url, _RESIZE_STEP if bigger else -_RESIZE_STEP
                     )
                     return
         super().keyPressEvent(event)
@@ -328,6 +341,7 @@ class ExtractsView(QWidget):
         self._editor_doc_id = None
         self._editor_doc_edit = None
         self._editor_images = []  # image Captures rendered in the editor (#37)
+        self._editor_pastes = []  # pending pasted images, not yet captures (#48)
         self._suppress_dirty = False  # format-only changes keep Save off
 
         self.setLayout(layout)
@@ -445,8 +459,14 @@ class ExtractsView(QWidget):
             doc_item = QTreeWidgetItem([_doc_label(path, name, doc_id)])
             doc_item.setData(0, Qt.ItemDataRole.UserRole, {"doc_id": doc_id})
             for extract in extracts:
-                first_cap = extract.captures[0] if extract.captures else None
-                ex_item = QTreeWidgetItem([_extract_label(extract), "↱ Jump"])
+                # Pasted images have no page (#48): jump anchors on the
+                # first capture that has one; pure-paste rows hide ↱.
+                first_cap = next(
+                    (c for c in extract.captures if c.page is not None), None
+                )
+                ex_item = QTreeWidgetItem(
+                    [_extract_label(extract), "↱ Jump" if first_cap else ""]
+                )
                 ex_item.setData(
                     0, Qt.ItemDataRole.UserRole,
                     {
@@ -542,6 +562,7 @@ class ExtractsView(QWidget):
         # Connected after the fill: building the document is not an edit.
         edit.textChanged.connect(self._mark_dirty)
         edit.resize_requested.connect(self._on_image_resize)
+        edit.pasted_image.connect(self._on_pasted_image)
         self.editor_layout.addWidget(edit)
         self._editor_doc_edit = edit
         self.editor_layout.addStretch()
@@ -572,26 +593,32 @@ class ExtractsView(QWidget):
             if part:
                 cursor.insertText(part)
             if i < len(parts) - 1 and i < len(images):
-                cursor.insertImage(self._image_format(edit.document(), images[i], i))
+                cursor.insertImage(
+                    self._image_format(
+                        edit.document(),
+                        images[i].image_blob,
+                        images[i].display_w,
+                        f"capimg://{i}",
+                    )
+                )
 
-    def _image_format(self, doc, cap, index):
-        """Inline image format for one Capture: decoded PNG registered as
-        a document resource, displayed at the capture's explicit
-        display_w when set (#37), else within the size band
-        (_IMG_MIN_W.._IMG_MAX_W, aspect kept): small captures upscale to
+    def _image_format(self, doc, blob, display_w, url):
+        """Inline image format for one image source: decoded PNG
+        registered as a document resource under `url`, displayed at an
+        explicit `display_w` when set (#37), else within the size band
+        (_IMG_MIN_W.._IMG_MAX_W, aspect kept): small sources upscale to
         the floor so they read at a comfortable size next to the note
         text (#46), oversized sources downscale to the cap."""
-        image = QImage.fromData(cap.image_blob)
+        image = QImage.fromData(blob)
         if not image.isNull():
-            if cap.display_w:
-                target = min(max(int(cap.display_w), _IMG_W_MIN), _IMG_W_MAX)
+            if display_w:
+                target = min(max(int(display_w), _IMG_W_MIN), _IMG_W_MAX)
             else:
                 target = min(max(image.width(), _IMG_MIN_W), _IMG_MAX_W)
             if target != image.width():
                 image = image.scaledToWidth(
                     target, Qt.TransformationMode.SmoothTransformation
                 )
-        url = f"capimg://{index}"
         doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl(url), image)
         fmt = QTextImageFormat()
         fmt.setName(url)
@@ -600,41 +627,86 @@ class ExtractsView(QWidget):
             fmt.setHeight(float(image.height()))
         return fmt
 
-    def _on_image_resize(self, index, width):
-        """(Re)size an inline image from the context menu or +/- keys:
-        persist the presentation width (None = auto band) and re-render
-        it in place. Text is byte-identical so Save stays off (#37)."""
-        if (
-            not self._editor_open
-            or self._editor_doc_edit is None
-            or not (0 <= index < len(self._editor_images))
-        ):
+    def _on_pasted_image(self, qimg):
+        """A clipboard image was pasted (#48): keep its PNG blob as a
+        pending capture and render it inline at once (auto band until
+        resized). The capture row is created on the next Save."""
+        if self._editor_doc_edit is None:
             return
-        cap = self._editor_images[index]
-        if width is not None:
-            width = min(max(int(width), _IMG_W_MIN), _IMG_W_MAX)
-            if width == cap.display_w:
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        qimg.save(buf, "PNG")
+        blob = bytes(buf.data())
+        n = len(self._editor_pastes)
+        self._editor_pastes.append(
+            {"blob": blob, "display_w": None, "capture_id": None}
+        )
+        url = f"paste://{n}"
+        fmt = self._image_format(self._editor_doc_edit.document(), blob, None, url)
+        self._editor_doc_edit.textCursor().insertImage(fmt)
+
+    def _on_image_resize(self, url, width):
+        """(Re)size an inline image from the context menu or +/- keys
+        (#37/#48): capimg://n persists display_w on the capture row;
+        paste://n updates the session-pending image (and its row too
+        once Save has created it). Text is byte-identical, Save stays
+        off for saved images."""
+        if not self._editor_open or self._editor_doc_edit is None:
+            return
+        if url.startswith("capimg://"):
+            try:
+                index = int(url[len("capimg://"):])
+            except ValueError:
                 return
-        elif cap.display_w is None:
+            if not (0 <= index < len(self._editor_images)):
+                return
+            cap = self._editor_images[index]
+            if width is not None:
+                width = min(max(int(width), _IMG_W_MIN), _IMG_W_MAX)
+                if width == cap.display_w:
+                    return
+            elif cap.display_w is None:
+                return
+            conn = self._db_conn()
+            if conn is None:
+                return
+            set_capture_display_w(conn, cap.id, width)
+            cap.display_w = width
+            blob, display_w = cap.image_blob, cap.display_w
+        elif url.startswith("paste://"):
+            try:
+                n = int(url[len("paste://"):])
+            except ValueError:
+                return
+            if not (0 <= n < len(self._editor_pastes)):
+                return
+            entry = self._editor_pastes[n]
+            if width is not None:
+                width = min(max(int(width), _IMG_W_MIN), _IMG_W_MAX)
+                if width == entry["display_w"]:
+                    return
+            elif entry["display_w"] is None:
+                return
+            entry["display_w"] = width
+            if entry["capture_id"] is not None:
+                conn = self._db_conn()
+                if conn is not None:
+                    set_capture_display_w(conn, entry["capture_id"], width)
+            blob, display_w = entry["blob"], entry["display_w"]
+        else:
             return
-        conn = self._db_conn()
-        if conn is None:
-            return
-        set_capture_display_w(conn, cap.id, width)
-        cap.display_w = width
         self._suppress_dirty = True
         try:
-            self._re_render_image(index, cap)
+            self._re_render_image(url, blob, display_w)
         finally:
             self._suppress_dirty = False
 
-    def _re_render_image(self, index, cap):
-        """Swap image `index` in place: register the newly sized pixmap
-        under its capimg:// URL and rewrite the format on the single
-        document position holding it. Cursor and text untouched."""
+    def _re_render_image(self, url, blob, display_w):
+        """Swap the image under `url` in place: register the newly
+        sized pixmap and rewrite the format on the single document
+        position holding it. Cursor and text untouched."""
         doc = self._editor_doc_edit.document()
-        fmt = self._image_format(doc, cap, index)
-        url = f"capimg://{index}"
+        fmt = self._image_format(doc, blob, display_w, url)
         cursor = QTextCursor(doc)
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         while True:
@@ -642,13 +714,75 @@ class ExtractsView(QWidget):
             if cur_fmt.isImageFormat() and cur_fmt.property(
                 QTextFormat.Property.ImageName
             ) == url:
-                # Forward scan first hits the image char itself; select
-                # exactly that one char and swap its format.
-                cursor.setPosition(cursor.position() + 1, QTextCursor.MoveMode.KeepAnchor)
+                # Qt quirk (see _image_backends): the match position m may
+                # be the image's own index, its +1 extension point, or the
+                # previous image's shadow on an adjacent placeholder.
+                # Resolve the real image index and swap that one char.
+                m = cursor.position()
+                at_m = doc.characterAt(m) == IMG_PLACEHOLDER
+                prev_is_img = m >= 1 and doc.characterAt(m - 1) == IMG_PLACEHOLDER
+                if at_m and not prev_is_img:
+                    k = m
+                elif prev_is_img:
+                    k = m - 1
+                else:
+                    return  # unlocatable: format nothing rather than a neighbor
+                cursor.setPosition(k)
+                cursor.setPosition(k + 1, QTextCursor.MoveMode.KeepAnchor)
                 cursor.setCharFormat(fmt)
                 return
             if not cursor.movePosition(QTextCursor.MoveOperation.NextCharacter):
                 return
+
+    def _image_backends(self):
+        """Per-placeholder backend in document order, from the live
+        QTextDocument (#48): int = existing capture id, ("paste", n) =
+        session-pending paste, None = a U+FFFC that carries no image
+        (stripped on save). Exact identity — no positional guessing.
+
+        Qt quirk: QTextCursor.charFormat() at position p reports an
+        image at p or p-1 depending on the preceding character, and
+        adjacent images shadow each other. So each placeholder p is
+        probed at p then p+1, skipping the previously resolved image's
+        name (an adjacent image's format leaking in)."""
+        doc = self._editor_doc_edit.document()
+        backends = []
+        prev_name = None
+        for pos in range(doc.characterCount()):
+            if doc.characterAt(pos) != IMG_PLACEHOLDER:
+                continue
+            name = None
+            for probe_pos in (pos, pos + 1):
+                if probe_pos >= doc.characterCount():
+                    break
+                probe = QTextCursor(doc)
+                probe.setPosition(probe_pos)
+                fmt = probe.charFormat()
+                if not fmt.isImageFormat():
+                    continue
+                cand = fmt.property(QTextFormat.Property.ImageName)
+                if isinstance(cand, str) and cand != prev_name:
+                    name = cand
+                    break
+            prev_name = name
+            backend = None
+            if isinstance(name, str) and name.startswith("capimg://"):
+                try:
+                    i = int(name[len("capimg://"):])
+                except ValueError:
+                    i = -1
+                if 0 <= i < len(self._editor_images):
+                    backend = self._editor_images[i].id
+            elif isinstance(name, str) and name.startswith("paste://"):
+                try:
+                    n = int(name[len("paste://"):])
+                except ValueError:
+                    n = -1
+                if 0 <= n < len(self._editor_pastes):
+                    saved_id = self._editor_pastes[n]["capture_id"]
+                    backend = saved_id if saved_id is not None else ("paste", n)
+            backends.append(backend)
+        return backends
 
     def _mark_dirty(self):
         """The document changed: enable Save (Back would auto-save anyway).
@@ -673,10 +807,18 @@ class ExtractsView(QWidget):
         conn = self._db_conn()
         if conn is None:
             return False
-        if not save_extract_text(
-            conn, self._editor_extract_id, self._editor_doc_edit.toPlainText()
-        ):
+        result = save_extract_text(
+            conn,
+            self._editor_extract_id,
+            self._editor_doc_edit.toPlainText(),
+            image_backends=self._image_backends(),
+            pending_images=self._editor_pastes,
+        )
+        if result is False:
             return False
+        if isinstance(result, dict):
+            for n, capture_id in result.items():
+                self._editor_pastes[n]["capture_id"] = capture_id
         self._editor_dirty = False
         self.save_btn.setEnabled(False)
         self._sync_tree_preview()
@@ -739,6 +881,7 @@ class ExtractsView(QWidget):
         self._editor_doc_id = None
         self._editor_doc_edit = None
         self._editor_images = []  # image Captures rendered in the editor (#37)
+        self._editor_pastes = []  # pending pasted images, not yet captures (#48)
         self._suppress_dirty = False  # format-only changes keep Save off
         self.save_btn.setEnabled(False)
         self.tree.setFocus()

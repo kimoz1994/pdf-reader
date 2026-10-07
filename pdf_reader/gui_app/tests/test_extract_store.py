@@ -980,3 +980,154 @@ def test_display_title_whitespace_only_metadata_falls_back(tmp_path):
     p = tmp_path / "plain.pdf"
     _make_pdf(p, title="   ")
     assert display_title(str(p), p.name) == "plain"
+
+
+def test_commit_working_set_allows_pasted_capture(conn):
+    """A capture with no PDF anchor (pasted image, #48) round-trips:
+    page/rect stay NULL through write and read."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(page=None, rect=None, kind="image", image_blob=b"png")]
+    )
+    cap = list_extracts_for_doc(conn, doc_id)[0].captures[0]
+    assert cap.page is None
+    assert cap.rect is None
+    assert cap.image_blob == b"png"
+
+
+def test_init_schema_relaxes_page_rect_and_backfills_order():
+    """A pre-#48 captures table (NOT NULL page/rect, no display_order)
+    is rewritten atomically: nullable anchors, data intact, display_order
+    backfilled in id order, idempotent on re-run."""
+    c = sqlite3.connect(":memory:")
+    c.execute(
+        """CREATE TABLE extracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            type TEXT NOT NULL,
+            text_content TEXT
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE captures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            extract_id INTEGER NOT NULL REFERENCES extracts(id) ON DELETE CASCADE,
+            page INTEGER NOT NULL,
+            rect TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            text_content TEXT,
+            image_blob BLOB
+        )"""
+    )
+    c.execute(
+        "INSERT INTO extracts (doc_id, type, text_content) VALUES (1, 'combined', 'hi')"
+    )
+    c.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind) VALUES (1, 0, '0,0,1,1', 'text')"
+    )
+    c.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, image_blob) "
+        "VALUES (1, 3, '2,2,4,4', 'image', x'00')"
+    )
+    init_schema(c)
+
+    info = {r[1]: r for r in c.execute("PRAGMA table_info(captures)").fetchall()}
+    assert info["page"][3] == 0 and info["rect"][3] == 0  # NOT NULL dropped
+    assert "display_w" in info and "display_order" in info
+    rows = c.execute(
+        "SELECT page, display_order FROM captures ORDER BY id"
+    ).fetchall()
+    assert rows == [(0, 0), (3, 1)]  # data survived, order backfilled
+
+    init_schema(c)  # idempotent: rewrite must not run twice
+    assert c.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 2
+    c.close()
+
+
+def test_save_backends_pastes_create_and_order(conn):
+    """#48 core: a ("paste", n) backend creates a capture (page/rect
+    NULL) and display_order places it exactly where its placeholder
+    sits; a second save with plain ids creates nothing (no duplicates)."""
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(0, (0, 0, 1, 1), "text", "intro"),
+            Capture(0, (2, 2, 3, 3), "image", image_blob=b"img1"),
+        ],
+    )
+    img = next(
+        c for c in list_extracts_for_doc(conn, doc_id)[0].captures if c.kind == "image"
+    )
+    text = "intro\n\n" + IMG_PLACEHOLDER + "\n\npasted note\n\n" + IMG_PLACEHOLDER
+
+    created = save_extract_text(
+        conn,
+        eid,
+        text,
+        image_backends=[img.id, ("paste", 0)],
+        pending_images=[{"blob": b"pasteimg", "display_w": 333}],
+    )
+    assert list(created.keys()) == [0]
+    caps = list_extracts_for_doc(conn, doc_id)[0]
+    assert caps.text_content == text
+    pasted = [c for c in caps.captures if c.page is None]
+    assert len(pasted) == 1
+    assert pasted[0].image_blob == b"pasteimg"
+    assert pasted[0].display_w == 333
+    # list_extracts returns captures already ordered by display_order
+    assert caps.captures[0].kind == "text"  # text anchors stay first (jump target)
+    assert [c.id for c in caps.captures if c.kind == "image"] == [
+        img.id,
+        pasted[0].id,
+    ]
+
+    again = save_extract_text(
+        conn,
+        eid,
+        text,
+        image_backends=[img.id, pasted[0].id],
+        pending_images=[],
+    )
+    assert again == {}
+    assert sum(1 for c in caps.captures if c.page is None) == 1  # no duplicate
+
+
+def test_save_backends_strips_bare_placeholder(conn):
+    """A U+FFFC with no image behind it (backend None) is stripped from
+    the blob and never becomes a capture."""
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "keep")]
+    )
+    text = "keep\n\n" + IMG_PLACEHOLDER
+    created = save_extract_text(
+        conn, eid, text, image_backends=[None], pending_images=[]
+    )
+    assert created == {}
+    assert IMG_PLACEHOLDER not in list_extracts_for_doc(conn, doc_id)[0].text_content
+    assert list_extracts_for_doc(conn, doc_id)[0].captures[0].kind == "text"
+
+
+def test_preview_pasted_and_mixed_page_span(conn):
+    """Pure-paste Extracts preview (pasted); mixed image Extracts take
+    the page span from PDF-anchored images only (#48)."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn, doc_id, [Capture(None, None, "image", image_blob=b"p")]
+    )
+    pure = list_extracts_for_doc(conn, doc_id)[0]
+    assert preview_for_extract(pure) == "(pasted)"
+
+    commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(2, (0, 0, 1, 1), "image", image_blob=b"pdfimg"),
+            Capture(None, None, "image", image_blob=b"pastedimg"),
+        ],
+    )
+    mixed = list_extracts_for_doc(conn, doc_id)[0]  # newest first
+    assert preview_for_extract(mixed) == "p. 3"
