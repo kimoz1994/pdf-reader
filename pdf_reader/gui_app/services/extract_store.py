@@ -27,8 +27,9 @@ _BLOB_SEP = "\n\n"
 class Capture:
     """One snippet inside an Extract: text or image, bound to a page + rect."""
 
-    page: int
-    rect: Tuple[float, float, float, float]  # PDF-space x0,y0,x1,y1
+    page: Optional[int]  # None: pasted image, not from the PDF (#48)
+    rect: Optional[Tuple[float, float, float, float]]  # PDF-space
+    # x0,y0,x1,y1; None for pasted images (#48)
     kind: str  # 'text' | 'image'
     text_content: Optional[str] = None  # kind='text'
     image_blob: Optional[bytes] = None  # kind='image', PNG
@@ -54,8 +55,11 @@ def init_schema(conn) -> None:
     Also migrates old databases once: adds `extracts.text_content`
     (pre-blob backfill: per-capture text joined in capture-id order,
     images as placeholders, then the per-capture text NULLed — captures
-    are anchors from here on) and adds `captures.display_w` (nullable
-    presentation width, #37). Idempotent via column-existence checks.
+    are anchors from here on), adds `captures.display_w` (nullable
+    presentation width, #37), relaxes page/rect to nullable for pasted
+    images (#48, atomic table rewrite), and adds/backfills
+    `captures.display_order` (render order, #48). Idempotent via
+    column-existence checks.
     """
     conn.execute(
         """
@@ -73,12 +77,13 @@ def init_schema(conn) -> None:
         CREATE TABLE IF NOT EXISTS captures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             extract_id INTEGER NOT NULL REFERENCES extracts(id) ON DELETE CASCADE,
-            page INTEGER NOT NULL,
-            rect TEXT NOT NULL,
+            page INTEGER,
+            rect TEXT,
             kind TEXT NOT NULL,
             text_content TEXT,
             image_blob BLOB,
-            display_w INTEGER
+            display_w INTEGER,
+            display_order INTEGER
         )
         """
     )
@@ -101,9 +106,61 @@ def init_schema(conn) -> None:
                 (_BLOB_SEP.join(elements), eid),
             )
         conn.execute("UPDATE captures SET text_content = NULL WHERE kind = 'text'")
-    cap_cols = {r[1] for r in conn.execute("PRAGMA table_info(captures)").fetchall()}
+    cap_rows = conn.execute("PRAGMA table_info(captures)").fetchall()
+    cap_cols = {r[1]: r for r in cap_rows}
+    if "page" in cap_cols and "rect" in cap_cols and (
+        cap_cols["page"][3] or cap_cols["rect"][3]
+    ):
+        # page/rect become nullable so pasted images (no PDF anchor) fit
+        # (#48). SQLite cannot drop NOT NULL in place — atomic rewrite.
+        keep = [
+            name
+            for name in (
+                "id", "extract_id", "page", "rect", "kind",
+                "text_content", "image_blob", "display_w", "display_order",
+            )
+            if name in cap_cols
+        ]
+        conn.execute(
+            """
+            CREATE TABLE captures_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                extract_id INTEGER NOT NULL REFERENCES extracts(id) ON DELETE CASCADE,
+                page INTEGER,
+                rect TEXT,
+                kind TEXT NOT NULL,
+                text_content TEXT,
+                image_blob BLOB,
+                display_w INTEGER,
+                display_order INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO captures_new ({0}) SELECT {0} FROM captures".format(
+                ", ".join(keep)
+            )
+        )
+        conn.execute("DROP TABLE captures")
+        conn.execute("ALTER TABLE captures_new RENAME TO captures")
+        cap_rows = conn.execute("PRAGMA table_info(captures)").fetchall()
+        cap_cols = {r[1]: r for r in cap_rows}
     if "display_w" not in cap_cols:
         conn.execute("ALTER TABLE captures ADD COLUMN display_w INTEGER")
+    if "display_order" not in cap_cols:
+        conn.execute("ALTER TABLE captures ADD COLUMN display_order INTEGER")
+    # Backfill display_order for legacy rows: per-extract id order —
+    # the exact order the editor rendered images in before #48.
+    conn.execute(
+        """
+        UPDATE captures SET display_order = (
+            SELECT COUNT(*) FROM captures c2
+            WHERE c2.extract_id = captures.extract_id
+              AND c2.id <= captures.id
+        ) - 1
+        WHERE display_order IS NULL
+        """
+    )
     conn.commit()
 
 
@@ -116,11 +173,15 @@ def _derive_type(captures: List[Capture]) -> str:
     return "combined"
 
 
-def _rect_to_str(rect: Tuple[float, float, float, float]) -> str:
+def _rect_to_str(rect: Optional[Tuple[float, float, float, float]]) -> Optional[str]:
+    if rect is None:
+        return None  # pasted image: no PDF anchor (#48)
     return ",".join(str(v) for v in rect)
 
 
-def _rect_from_str(s: str) -> Tuple[float, float, float, float]:
+def _rect_from_str(s: Optional[str]) -> Optional[Tuple[float, float, float, float]]:
+    if not s:
+        return None  # pasted image: no PDF anchor (#48)
     return tuple(float(v) for v in s.split(","))
 
 
@@ -145,11 +206,12 @@ def commit_working_set(conn, doc_id: int, captures: List[Capture]) -> Optional[i
     )
     extract_id = cur.lastrowid
 
-    for cap in captures:
+    for order, cap in enumerate(captures):
         conn.execute(
             """
-            INSERT INTO captures (extract_id, page, rect, kind, text_content, image_blob)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO captures
+                (extract_id, page, rect, kind, text_content, image_blob, display_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 extract_id,
@@ -158,6 +220,7 @@ def commit_working_set(conn, doc_id: int, captures: List[Capture]) -> Optional[i
                 cap.kind,
                 None,
                 cap.image_blob,
+                order,
             ),
         )
     conn.commit()
@@ -188,7 +251,7 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
             SELECT id, page, rect, kind, text_content, image_blob, display_w
             FROM captures
             WHERE extract_id = ?
-            ORDER BY id ASC
+            ORDER BY COALESCE(display_order, id) ASC, id ASC
             """,
             (eid,),
         ).fetchall()
@@ -220,10 +283,10 @@ def preview_for_extract(extract: Extract) -> str:
     placeholders stripped, truncated to ~60 characters with an ellipsis).
     With no text: image placeholders present → the page span (`p. 4`,
     `pp. 4–5`, `pp. 1, 5`) of the images still displayed — a deleted
-    placeholder shrinks a multi-page span (#44); none → `(empty)` —
-    deleting an image from the document deletes it (Capture anchors
-    stay). Derived at render
-    time — never persisted.
+    placeholder shrinks a multi-page span (#44), pasted images (no PDF
+    page, #48) are skipped and a pure-paste Extract previews `(pasted)`;
+    none → `(empty)` — deleting an image from the document deletes it
+    (Capture anchors stay). Derived at render time — never persisted.
     """
     blob = extract.text_content or ""
     for part in blob.split(_BLOB_SEP):
@@ -241,9 +304,12 @@ def preview_for_extract(extract: Extract) -> str:
         return "(empty)"
 
     images = [c for c in extract.captures if c.kind == "image" and c.image_blob]
-    pages = sorted({c.page + 1 for c in images[: displayed_image_count(extract)]})
+    shown = images[: displayed_image_count(extract)]
+    pages = sorted({c.page + 1 for c in shown if c.page is not None})
     if not pages:
-        return "(empty)"
+        # Pasted images have no PDF page (#48): a pure-paste Extract
+        # previews as such instead of masquerading as empty.
+        return "(pasted)" if any(c.page is None for c in shown) else "(empty)"
     if len(pages) == 1:
         return f"p. {pages[0]}"
     if pages == list(range(pages[0], pages[-1] + 1)):
@@ -374,31 +440,128 @@ def _normalize_blob(text: str, image_count: int) -> str:
     return text
 
 
-def save_extract_text(conn, extract_id: int, text: str) -> bool:
+def save_extract_text(
+    conn,
+    extract_id: int,
+    text: str,
+    image_backends: Optional[List] = None,
+    pending_images: Optional[List] = None,
+):
     """Persist an Extract's whole text blob (the joined editor document).
 
-    Unbacked placeholders (pasted from the clipboard) are stripped; a
-    deleted placeholder stays deleted — an emptied Extract persists as
-    empty while its Capture rows remain as anchors. Empty and
-    whitespace-only blobs are allowed: content and existence are
-    independent. Returns False only when the Extract itself does not
-    exist.
+    Without `image_backends` the legacy rule applies: unbacked
+    placeholders are stripped from the end (extras), a deleted
+    placeholder stays deleted; returns True (False only when the
+    Extract does not exist).
+
+    With `image_backends` — one entry per placeholder in `text`, in
+    document order, from the editor's QTextDocument walk (#48) —
+    placeholder↔capture identity is exact instead of positional:
+    an `int` is an existing capture id, `("paste", n)` creates a
+    capture from `pending_images[n]` (page/rect NULL — pasted images
+    have no PDF anchor), `None` strips the placeholder (not an image).
+    Captures are then renumbered `display_order`: text captures first,
+    the document's images in their exact order, then image anchors
+    whose placeholder was deleted (kept, not rendered — blue redraw
+    and Jump unaffected). Returns {paste_n: new_capture_id} on
+    success, False when the Extract does not exist.
     """
     exists = conn.execute(
         "SELECT 1 FROM extracts WHERE id = ?", (extract_id,)
     ).fetchone()
     if exists is None:
         return False
-    image_count = conn.execute(
-        "SELECT COUNT(*) FROM captures WHERE extract_id = ? AND kind = 'image'",
-        (extract_id,),
-    ).fetchone()[0]
+    if image_backends is None:
+        image_count = conn.execute(
+            "SELECT COUNT(*) FROM captures WHERE extract_id = ? AND kind = 'image'",
+            (extract_id,),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE extracts SET text_content = ? WHERE id = ?",
+            (_normalize_blob(text, image_count), extract_id),
+        )
+        conn.commit()
+        return True
+
+    parts = text.split(IMG_PLACEHOLDER)
+    if len(parts) - 1 != len(image_backends):
+        # Defensive: both derive from the same document, so this should
+        # not happen — fall back to the legacy count-based rule.
+        image_count = conn.execute(
+            "SELECT COUNT(*) FROM captures WHERE extract_id = ? AND kind = 'image'",
+            (extract_id,),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE extracts SET text_content = ? WHERE id = ?",
+            (_normalize_blob(text, image_count), extract_id),
+        )
+        conn.commit()
+        return {}
+
+    blob = ""
+    kept: List = []
+    for i, part in enumerate(parts):
+        blob += part
+        if i < len(parts) - 1:
+            backend = image_backends[i]
+            if backend is None:
+                continue  # placeholder is not an image — strip it
+            blob += IMG_PLACEHOLDER
+            kept.append(backend)
+
+    created: dict = {}
+    image_seq: List[int] = []  # desired final order of rendered images
+    for backend in kept:
+        if isinstance(backend, tuple):
+            n = backend[1]
+            info = (pending_images or [])[n]
+            cur = conn.execute(
+                """
+                INSERT INTO captures
+                    (extract_id, page, rect, kind, text_content, image_blob, display_w)
+                VALUES (?, NULL, NULL, 'image', NULL, ?, ?)
+                """,
+                (extract_id, info.get("blob"), info.get("display_w")),
+            )
+            created[n] = cur.lastrowid
+            image_seq.append(cur.lastrowid)
+        else:
+            image_seq.append(backend)
+
+    text_ids = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT id FROM captures
+            WHERE extract_id = ? AND kind = 'text'
+            ORDER BY COALESCE(display_order, id) ASC, id ASC
+            """,
+            (extract_id,),
+        ).fetchall()
+    ]
+    img_ids = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT id FROM captures
+            WHERE extract_id = ? AND kind = 'image'
+            ORDER BY COALESCE(display_order, id) ASC, id ASC
+            """,
+            (extract_id,),
+        ).fetchall()
+    ]
+    in_seq = set(image_seq)
+    ordered = text_ids + image_seq + [i for i in img_ids if i not in in_seq]
+    for rank, cid in enumerate(ordered):
+        conn.execute(
+            "UPDATE captures SET display_order = ? WHERE id = ?", (rank, cid)
+        )
     conn.execute(
         "UPDATE extracts SET text_content = ? WHERE id = ?",
-        (_normalize_blob(text, image_count), extract_id),
+        (blob, extract_id),
     )
     conn.commit()
-    return True
+    return created
 
 
 def delete_extract(conn, extract_id: int) -> None:

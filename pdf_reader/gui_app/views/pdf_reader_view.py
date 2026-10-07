@@ -1181,6 +1181,7 @@ class PDFReaderView(QWidget):
             extracts = [
                 rect_to_qrectf(layout.pdf_to_widget(c.page, c.rect))
                 for c in self.extract_captures
+                if c.page is not None and c.rect is not None  # pasted (#48)
             ]
             flash = None
             if self._flash_region is not None:
