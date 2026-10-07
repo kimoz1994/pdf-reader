@@ -149,23 +149,52 @@ class _ExtractDocEdit(QTextEdit):
         if self.height() != height:
             self.setFixedHeight(height)
 
-    def _image_url_at_cursor(self, cursor):
-        """Document resource URL of the image at the cursor or
-        immediately before it (the checks cover both charFormat()
-        conventions), else None. capimg:// = a saved capture, paste://
-        = a session-pending pasted image (#37/#48)."""
-        for pos in (cursor.position(), cursor.position() - 1):
-            if pos < 0:
-                continue
-            probe = QTextCursor(self.document())
-            probe.setPosition(pos)
-            fmt = probe.charFormat()
-            if fmt.isImageFormat():
-                name = fmt.property(QTextFormat.Property.ImageName)
-                if isinstance(name, str) and (
-                    name.startswith("capimg://") or name.startswith("paste://")
-                ):
+    def _image_url_at_cursor(self, cursor, prefer_start=False):
+        """Document resource URL of the image at the cursor, immediately
+        before it, or starting at it, else None. capimg:// = a saved
+        capture, paste:// = a session-pending pasted image (#37/#48).
+
+        Qt reports an image's charFormat() at its own index or at +1
+        depending on the preceding character, and adjacent images shadow
+        each other — so each candidate index is resolved with an
+        adjacency-aware probe (skip the shadowed index, fall back to the
+        +1 extension). Keys prefer the image ENDING at the cursor (the
+        post-paste state sits right after the new image); the context
+        menu passes prefer_start when the click landed on the right side
+        of the caret, picking the image that STARTS at the cursor."""
+        doc = self.document()
+        count = doc.characterCount()
+
+        def probe(p):
+            if 0 <= p < count:
+                pc = QTextCursor(doc)
+                pc.setPosition(p)
+                fmt = pc.charFormat()
+                if fmt.isImageFormat():
+                    name = fmt.property(QTextFormat.Property.ImageName)
+                    if isinstance(name, str) and (
+                        name.startswith("capimg://") or name.startswith("paste://")
+                    ):
+                        return name
+            return None
+
+        def resolve(q):
+            left_adj = q >= 1 and doc.characterAt(q - 1) == IMG_PLACEHOLDER
+            for p in ((q + 1, q) if left_adj else (q, q + 1)):
+                name = probe(p)
+                if name is not None:
                     return name
+            return None
+
+        pos = cursor.position()
+        before = pos >= 1 and doc.characterAt(pos - 1) == IMG_PLACEHOLDER
+        at = 0 <= pos < count and doc.characterAt(pos) == IMG_PLACEHOLDER
+        if prefer_start and at:
+            return resolve(pos)
+        if before:
+            return resolve(pos - 1)
+        if at:
+            return resolve(pos)
         return None
 
     def _rendered_width(self, url):
@@ -198,7 +227,12 @@ class _ExtractDocEdit(QTextEdit):
         return [bigger, smaller, reset]
 
     def contextMenuEvent(self, event):
-        url = self._image_url_at_cursor(self.cursorForPosition(event.pos()))
+        cursor = self.cursorForPosition(event.pos())
+        # Click right of the caret -> the image starting there; left of
+        # it -> the image ending there (adjacent pairs resolve cleanly).
+        caret = self.cursorRect(cursor)
+        prefer_start = event.pos().x() >= caret.left()
+        url = self._image_url_at_cursor(cursor, prefer_start=prefer_start)
         if url is None:
             super().contextMenuEvent(event)
             return
@@ -225,12 +259,11 @@ class _ExtractDocEdit(QTextEdit):
         key = event.key()
         bigger = key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal)
         smaller = key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore)
-        if (bigger or smaller) and not (
-            event.modifiers()
-            & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
-        ):
+        if bigger or smaller:
             cursor = self.textCursor()
             if not cursor.hasSelection():
+                # any modifiers (Ctrl+± is a common habit) — the image
+                # wins only when the cursor actually sits on one
                 url = self._image_url_at_cursor(cursor)
                 if url is not None:
                     self._emit_resize(
