@@ -333,7 +333,11 @@ class _FlashcardDialog(QDialog):
         self.answer_view.setReadOnly(True)
         self.answer_view.setPlainText(answer_text)
         self.answer_view.setStyleSheet(
-            "background-color: #f7f7f5; border: 1px solid #d0d0d0;"
+            # Explicit color: without it the OS dark-mode palette paints
+            # white text on this light paper → invisible (#55 follow-up,
+            # same root cause as the context menu).
+            "background-color: #f7f7f5; color: #1a1a1a;"
+            " border: 1px solid #d0d0d0;"
             " border-radius: 6px; padding: 8px; font-size: 14px;"
         )
         layout.addWidget(self.answer_view, 1)
