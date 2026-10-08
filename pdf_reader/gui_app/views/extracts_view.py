@@ -36,6 +36,8 @@ from PyQt6.QtCore import Qt, QBuffer, QItemSelectionModel, QIODevice, QUrl, pyqt
 from PyQt6.QtGui import (
     QBrush,
     QColor,
+    QKeySequence,
+    QShortcut,
     QImage,
     QAction,
     QTextCursor,
@@ -261,6 +263,15 @@ class _ExtractDocEdit(QTextEdit):
         reset.triggered.connect(lambda: self.resize_requested.emit(url, None))
         return [bigger, smaller, reset]
 
+    def has_selection(self) -> bool:
+        return bool(self.textCursor().hasSelection())
+
+    def request_flashcard(self):
+        """The ONE gated action path shared by the entry points
+        (right-click #55, Ctrl+K #57): emit only when selected."""
+        if self.has_selection():
+            self.make_flashcard_requested.emit()
+
     def contextMenuEvent(self, event):
         cursor = self.cursorForPosition(event.pos())
         # Click right of the caret -> the image starting there; left of
@@ -272,10 +283,10 @@ class _ExtractDocEdit(QTextEdit):
         # flashcard action when a selection exists (#55).
         menu = self.createStandardContextMenu(event.globalPos())
         menu.setStyleSheet(_CONTEXT_MENU_CSS)
-        if self.textCursor().hasSelection():
+        if self.has_selection():
             menu.addSeparator()
             make_card = QAction("🃏 Make flashcard…", self)
-            make_card.triggered.connect(self.make_flashcard_requested.emit)
+            make_card.triggered.connect(self.request_flashcard)
             menu.addAction(make_card)
         if url is not None:
             menu.addSeparator()
@@ -294,9 +305,18 @@ class _ExtractDocEdit(QTextEdit):
         super().insertFromMimeData(source)
 
     def keyPressEvent(self, event):
-        """+/- resize the adjacent image instead of typing — only when the
-        cursor sits on/next to an image and nothing is selected; text
-        edits keep their literal +/- as before (#37)."""
+        """Ctrl+K = Make flashcard (#57): same dialog as the right-click
+        entry when a selection exists, inert otherwise — consumed so it
+        can never fall through to the native delete-to-end-of-line
+        binding. +/- resize the adjacent image instead of typing — only
+        when the cursor sits on/next to an image and nothing is selected;
+        text edits keep their literal +/- as before (#37)."""
+        if (
+            event.key() == Qt.Key.Key_K
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+        ):
+            self.request_flashcard()
+            return
         key = event.key()
         bigger = key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal)
         smaller = key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore)
@@ -360,11 +380,18 @@ class _FlashcardDialog(QDialog):
         self.question_edit.textChanged.connect(
             lambda text: self.add_btn.setEnabled(bool(text.strip()))
         )
+        # Keyboard flow (#57): Enter in the question field adds the card
+        # as soon as it has one; empty → no-op (Add stays the gate).
+        self.question_edit.returnPressed.connect(self._submit_if_ready)
         buttons.addWidget(self.add_btn)
         layout.addLayout(buttons)
 
     def question(self) -> str:
         return self.question_edit.text()
+
+    def _submit_if_ready(self):
+        if self.add_btn.isEnabled():
+            self.accept()
 
     def showEvent(self, event):
         # The question field is autofocused on open (#55).
@@ -529,6 +556,29 @@ class ExtractsView(QWidget):
         )
         self.save_btn.clicked.connect(self._save_editor)
         back_row.addWidget(self.save_btn)
+
+        # Toolbar flashcard entry (#57): same dialog as right-click and
+        # Ctrl+K — enabled only while the editor has a selection.
+        self.flashcard_btn = QPushButton("🃏 Make flashcard")
+        self.flashcard_btn.setFixedHeight(40)
+        self.flashcard_btn.setEnabled(False)
+        self.flashcard_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: transparent;
+                color: #3498db;
+                border: 1px solid #3498db;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 0 18px;
+            }
+            QPushButton:hover { background-color: #3498db; color: white; }
+            QPushButton:disabled { color: #bdc3c7; border-color: #bdc3c7; }
+            """
+        )
+        self.flashcard_btn.clicked.connect(self._make_flashcard)
+        back_row.addWidget(self.flashcard_btn)
         back_row.addStretch()
         ed.addLayout(back_row)
 
@@ -537,6 +587,20 @@ class ExtractsView(QWidget):
             "font-size: 22px; font-weight: bold; color: #3498db;"
         )
         ed.addWidget(self.editor_title)
+
+        # Ctrl+K entry (#57) with a page-wide context: fires with focus
+        # anywhere on the editor page (editor, Save, Back) and routes to
+        # the same gated handler as the toolbar button; the editor's
+        # keyPressEvent covers the case where QTextEdit claims the key
+        # first — the two can never both fire, and both end at
+        # _make_flashcard.
+        self.ctrl_k_shortcut = QShortcut(
+            QKeySequence("Ctrl+K"), self.editor_page
+        )
+        self.ctrl_k_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.ctrl_k_shortcut.activated.connect(self._make_flashcard)
 
         self.editor_scroll = QScrollArea()
         self.editor_scroll.setWidgetResizable(True)
@@ -682,6 +746,7 @@ class ExtractsView(QWidget):
         self._editor_doc_id = data.get("doc_id")
         self._editor_dirty = False
         self.save_btn.setEnabled(False)
+        self.flashcard_btn.setEnabled(False)
         self._editor_doc_edit = None
 
         while self.editor_layout.count():
@@ -696,6 +761,7 @@ class ExtractsView(QWidget):
         edit.resize_requested.connect(self._on_image_resize)
         edit.pasted_image.connect(self._on_pasted_image)
         edit.make_flashcard_requested.connect(self._make_flashcard)
+        edit.selectionChanged.connect(self._sync_flashcard_btn)
         self.editor_layout.addWidget(edit)
         self._editor_doc_edit = edit
         self.editor_layout.addStretch()
@@ -926,6 +992,14 @@ class ExtractsView(QWidget):
             return
         self._editor_dirty = True
         self.save_btn.setEnabled(True)
+
+    def _sync_flashcard_btn(self):
+        """Toolbar entry (#57): the flashcard button tracks the editor's
+        selection — enabled only while there is one."""
+        edit = self._editor_doc_edit
+        self.flashcard_btn.setEnabled(
+            edit is not None and edit.has_selection()
+        )
 
     def _make_flashcard(self):
         """Right-click → 🃏 Make flashcard… (#55): snapshot the live

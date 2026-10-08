@@ -107,7 +107,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
 | Extracts view | Delete an Extract | select → 🗑️ Delete Selected (confirm) |
-| Extract editor | Turn the selection into a flashcard | select → right-click → 🃏 Make flashcard… → type question → **Add Flashcard** |
+| Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
 | Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
 
@@ -119,8 +119,8 @@ Turn any passage you selected into a flashcard:
 
 1. Open an Extract in the **Extract Editor** (double-click its row).
 2. Select the text that should become the **answer**.
-3. Right-click the selection → **🃏 Make flashcard…**
-4. Type your **question** and press **Add Flashcard** (or `Esc` to cancel — nothing is stored).
+3. Open the dialog — any of: press `Ctrl+K`, right-click the selection → **🃏 Make flashcard…**, or click **🃏 Make flashcard** in the editor toolbar (all three work only while a selection exists).
+4. Type your **question** and press `Enter` (or **Add Flashcard**); `Esc` cancels — nothing is stored.
 
 The answer is copied at that moment: editing the Extract afterwards never changes the card. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — with removed sources marked honestly.
 
