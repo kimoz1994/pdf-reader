@@ -92,6 +92,35 @@ _IMG_W_MIN = 100
 _IMG_W_MAX = 4000
 _RESIZE_STEP = 60
 
+# Readable context menu over the light editor paper: the menu inherits
+# the paper background from `editor_doc`'s stylesheet while its text
+# follows the OS palette — white text on white in Windows dark mode.
+# Explicit colors make it independent of both.
+_CONTEXT_MENU_CSS = """
+QMenu {
+    background-color: #2b2b2b;
+    color: #ecf0f1;
+    border: 1px solid #3d566e;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 5px 26px 5px 22px;
+    background-color: transparent;
+}
+QMenu::item:selected {
+    background-color: #3498db;
+    color: white;
+}
+QMenu::item:disabled {
+    color: #7f8c8d;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #3d566e;
+    margin: 4px 10px;
+}
+"""
+
 
 class _ExtractDocEdit(QTextEdit):
     """The whole Extract as ONE editable document inside the Extract
@@ -242,6 +271,7 @@ class _ExtractDocEdit(QTextEdit):
         # Built by hand (not super()) so both branches can offer the
         # flashcard action when a selection exists (#55).
         menu = self.createStandardContextMenu(event.globalPos())
+        menu.setStyleSheet(_CONTEXT_MENU_CSS)
         if self.textCursor().hasSelection():
             menu.addSeparator()
             make_card = QAction("🃏 Make flashcard…", self)
