@@ -286,6 +286,9 @@ class _ExtractDocEdit(QTextEdit):
         if self.has_selection():
             menu.addSeparator()
             make_card = QAction("🃏 Make flashcard…", self)
+            # Qt6/Fusion prints an action's shortcut beside its label, so
+            # Ctrl+K stays discoverable in the menu (#57 follow-up).
+            make_card.setShortcut(QKeySequence("Ctrl+K"))
             make_card.triggered.connect(self.request_flashcard)
             menu.addAction(make_card)
         if url is not None:
