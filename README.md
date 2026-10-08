@@ -88,11 +88,12 @@ MainWindow
 ├── LibraryView       lists documents, opens a PDF
 ├── PdfReaderView     QPdfView-based reader (keys, search, page progress, extraction)
 ├── ExtractsView      Documents → Extracts → Captures review + edit + delete
-└── FlashcardsView    placeholder
+└── FlashcardsView    card list: question / source / created / next due (review pending)
 
 services/             engine modules (element detection, PDF loading, hints)
                        — element_detector is live (image click-capture), the rest dormant
-services/extract_store.py   headless extract/capture SQL seam (no Qt), pytest-tested
+services/extract_store.py   headless extract/capture/flashcard SQL seam (no Qt), pytest-tested
+services/selection_snapshot.py  editor selection → answer snapshot seam (offscreen Qt), pytest-tested
 services/pdf_geometry.py    layout/mapping math mirroring Qt's calculateDocumentLayout
 ```
 
@@ -112,16 +113,17 @@ pdf_reader/
 │   │   ├── main_window.py    sidebar + view routing
 │   │   ├── sidebar.py
 │   │   ├── services/
-│   │   │   ├── extract_store.py   headless extract/capture SQL seam (no Qt)
+│   │   │   ├── extract_store.py   headless extract/capture/flashcard SQL seam (no Qt)
+│   │   │   ├── selection_snapshot.py  editor selection → answer snapshot (offscreen Qt)
 │   │   │   ├── pdf_geometry.py    Qt-mirroring layout/mapping math
 │   │   │   ├── element_detector.py  live — image click-capture in the reader
 │   │   │   └── (dormant) pdf_loader, hint_generator, hint_overlay, search_engine
-│   │   ├── tests/            pytest (test_extract_store, test_pdf_geometry)
+│   │   ├── tests/            pytest (test_extract_store, test_pdf_geometry, test_selection_snapshot)
 │   │   └── views/
 │   │       ├── library_view.py
 │   │       ├── pdf_reader_view.py   the core reader
 │   │       ├── extracts_view.py     Documents → Extracts → Captures + edit + delete
-│   │       └── flashcards_view.py   placeholder
+│   │       └── flashcards_view.py   card list (review session pending)
 │   └── pdfs/test.pdf         sample document
 ```
 
@@ -145,7 +147,7 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Future work
 
-1. Flashcard review from extracts.
+1. Flashcard review from extracts — creation and listing shipped (#55); the FSRS review session is next.
 2. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation

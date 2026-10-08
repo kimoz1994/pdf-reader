@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import sqlite3
 
 import pytest
@@ -8,12 +10,14 @@ from services.extract_store import (
     Extract,
     capture_overlaps_extract,
     commit_working_set,
+    create_flashcard,
     delete_extract,
     display_title,
     displayed_image_count,
     init_schema,
     list_docs_with_extracts,
     list_extracts_for_doc,
+    list_flashcards,
     preview_for_extract,
     resolve_doc_id,
     save_extract_text,
@@ -1131,3 +1135,96 @@ def test_preview_pasted_and_mixed_page_span(conn):
     )
     mixed = list_extracts_for_doc(conn, doc_id)[0]  # newest first
     assert preview_for_extract(mixed) == "p. 3"
+
+
+def test_init_schema_creates_flashcard_tables(conn):
+    tables = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {"flashcards", "flashcard_images", "review_logs"} <= tables
+
+
+def test_flashcard_tables_migrate_legacy_db_and_are_idempotent(tmp_path):
+    """A pre-flashcard database gains the three tables on first run;
+    re-running the migration is a no-op (#55)."""
+    conn = _connect(tmp_path, "fc.db")
+    _legacy_schema(conn)
+    init_schema(conn)
+    tables = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {"flashcards", "flashcard_images", "review_logs"} <= tables
+    init_schema(conn)  # idempotent: second run is a no-op
+    conn.close()
+
+
+def test_create_flashcard_round_trip(conn):
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "source")]
+    )
+    answer = "The answer " + IMG_PLACEHOLDER
+    fc_id = create_flashcard(
+        conn,
+        question="What is it?",
+        answer_text=answer,
+        extract_id=eid,
+        doc_id=doc_id,
+    )
+    assert isinstance(fc_id, int)
+
+    cards = list_flashcards(conn)
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.id == fc_id
+    assert card.question == "What is it?"
+    assert card.answer_text == answer
+    assert card.extract_id == eid
+    assert card.doc_id == doc_id
+    assert card.source_name == "book.pdf"
+    assert card.source_path == "/tmp/book.pdf"
+    assert card.fsrs_json is None  # the scheduler lands with #58
+    assert card.created_at
+    due = datetime.fromisoformat(card.due_utc)
+    # A fresh card is due now: due_utc defaults to the current UTC time.
+    drift = abs((datetime.now(timezone.utc) - due).total_seconds())
+    assert drift < 120
+
+
+def test_list_flashcards_newest_first(conn):
+    first = create_flashcard(conn, "Q1", "A1")
+    second = create_flashcard(conn, "Q2", "A2")
+    assert [c.id for c in list_flashcards(conn)] == [second, first]
+
+
+def test_list_flashcards_survives_source_removal(conn):
+    """Cards are independent of their source: removing the pdfs row
+    leaves the card with a None source name (#54 orphan rule)."""
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    create_flashcard(
+        conn, "Q", "A", extract_id=eid, doc_id=doc_id
+    )
+    conn.execute("DELETE FROM pdfs WHERE id = ?", (doc_id,))
+    conn.commit()
+
+    cards = list_flashcards(conn)
+    assert len(cards) == 1
+    assert cards[0].source_name is None
+
+
+def test_create_flashcard_allows_null_source(conn):
+    fc_id = create_flashcard(conn, "Q", "A")
+    cards = list_flashcards(conn)
+    assert cards[0].id == fc_id
+    assert cards[0].extract_id is None
+    assert cards[0].doc_id is None
+    assert cards[0].source_name is None

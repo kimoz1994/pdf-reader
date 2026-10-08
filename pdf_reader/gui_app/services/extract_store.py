@@ -1,8 +1,9 @@
-"""Headless persistence seam for Extracts and Captures.
+"""Headless persistence seam for Extracts, Captures and Flashcards.
 
-Owns all SQL for the `extracts` and `captures` tables in `library.db`.
-Pure Python + sqlite3, no Qt imports — this is the single testable seam
-for the extract workflow. The GUI never touches these tables directly.
+Owns all SQL for the `extracts`, `captures` and `flashcards` tables in
+`library.db`. Pure Python + sqlite3, no Qt imports — this is the single
+testable seam for the extract workflow. The GUI never touches these
+tables directly.
 
 Text model: an Extract's text lives in one blob (`extracts.text_content`).
 Captures are immutable anchors (page + rect + kind + image blob) used for
@@ -12,6 +13,7 @@ image Capture in capture order — the same character Qt uses, so editor
 round-trips are lossless.
 """
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 import os
@@ -49,8 +51,31 @@ class Extract:
     text_content: Optional[str] = None  # the whole-Extract text blob
 
 
+@dataclass
+class Flashcard:
+    """One flashcard: a question + an immutable answer snapshot (#54).
+
+    `answer_text` was copied from the Extract Editor's selection at
+    creation (images marked U+FFFC, their blobs in `flashcard_images`,
+    #56) — later edits to the Extract never touch the card. `source_name`
+    comes from a LEFT JOIN: the source Document may be gone while the
+    card survives.
+    """
+
+    id: int
+    question: str
+    answer_text: str
+    created_at: Optional[str] = None  # UTC (CURRENT_TIMESTAMP)
+    due_utc: Optional[str] = None  # ISO-8601 UTC
+    fsrs_json: Optional[str] = None  # NULL until the scheduler lands (#58)
+    extract_id: Optional[int] = None
+    doc_id: Optional[int] = None
+    source_name: Optional[str] = None  # joined from pdfs, None when gone
+    source_path: Optional[str] = None  # joined from pdfs, for display_title
+
+
 def init_schema(conn) -> None:
-    """Create the extracts/captures tables idempotently.
+    """Create the extracts/captures/flashcards tables idempotently.
 
     Also migrates old databases once: adds `extracts.text_content`
     (pre-blob backfill: per-capture text joined in capture-id order,
@@ -88,6 +113,45 @@ def init_schema(conn) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_extracts_doc ON extracts(doc_id)")
+    # Flashcards (#54): an answer snapshot is immutable; scheduling
+    # state grows into fsrs_json/due_utc when the FSRS core lands (#58).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS flashcards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            extract_id INTEGER REFERENCES extracts(id),
+            doc_id INTEGER,
+            question TEXT NOT NULL,
+            answer_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            fsrs_json TEXT,
+            due_utc TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS flashcard_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            flashcard_id INTEGER NOT NULL REFERENCES flashcards(id) ON DELETE CASCADE,
+            idx INTEGER NOT NULL,
+            blob BLOB
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            flashcard_id INTEGER NOT NULL REFERENCES flashcards(id) ON DELETE CASCADE,
+            rating INTEGER NOT NULL,
+            reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_flashcards_due ON flashcards(due_utc)"
+    )
     cols = {r[1] for r in conn.execute("PRAGMA table_info(extracts)").fetchall()}
     if "text_content" not in cols:
         conn.execute("ALTER TABLE extracts ADD COLUMN text_content TEXT")
@@ -575,3 +639,63 @@ def delete_extract(conn, extract_id: int) -> None:
     conn.execute("DELETE FROM captures WHERE extract_id = ?", (extract_id,))
     conn.execute("DELETE FROM extracts WHERE id = ?", (extract_id,))
     conn.commit()
+
+
+def create_flashcard(
+    conn,
+    question: str,
+    answer_text: str,
+    extract_id: Optional[int] = None,
+    doc_id: Optional[int] = None,
+    due_utc: Optional[str] = None,
+) -> int:
+    """Persist one new flashcard; returns its id.
+
+    `answer_text` is the immutable snapshot taken from the editor's
+    selection (images as U+FFFC — blobs go to `flashcard_images`, #56).
+    `fsrs_json` stays NULL until the scheduler lands (#58); `due_utc`
+    defaults to now so a fresh card is immediately due for review (#54).
+    """
+    if due_utc is None:
+        due_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cur = conn.execute(
+        """
+        INSERT INTO flashcards (extract_id, doc_id, question, answer_text, due_utc)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (extract_id, doc_id, question, answer_text, due_utc),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_flashcards(conn) -> List[Flashcard]:
+    """All flashcards, newest-first, with the source Document's name.
+
+    LEFT JOIN mirrors `list_docs_with_extracts`: the source pdfs row may
+    be gone — the card survives and `source_name` comes back None (#54).
+    """
+    rows = conn.execute(
+        """
+        SELECT f.id, f.question, f.answer_text, f.created_at, f.due_utc,
+               f.fsrs_json, f.extract_id, f.doc_id, p.name, p.path
+        FROM flashcards f
+        LEFT JOIN pdfs p ON p.id = f.doc_id
+        ORDER BY f.id DESC
+        """
+    ).fetchall()
+    return [
+        Flashcard(
+            id=r[0],
+            question=r[1],
+            answer_text=r[2],
+            created_at=r[3],
+            due_utc=r[4],
+            fsrs_json=r[5],
+            extract_id=r[6],
+            doc_id=r[7],
+            source_name=r[8],
+            source_path=r[9],
+        )
+        for r in rows
+    ]

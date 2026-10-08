@@ -12,7 +12,36 @@ from pathlib import Path
 from views.library_view import LibraryView
 from views.pdf_reader_view import PDFReaderView
 from views.extracts_view import ExtractsView
+from views.flashcards_view import FlashcardsView
 from services.extract_store import init_schema, resolve_doc_id
+
+
+# Sidebar button states (#55): one active (blue), the rest idle.
+_SIDEBAR_ACTIVE = """
+    QPushButton {
+        background-color: #3498db;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #2980b9;
+    }
+"""
+_SIDEBAR_IDLE = """
+    QPushButton {
+        background-color: #34495e;
+        color: #ecf0f1;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+    }
+    QPushButton:hover {
+        background-color: #3d566e;
+    }
+"""
 
 
 class MainWindow(QMainWindow):
@@ -50,11 +79,13 @@ class MainWindow(QMainWindow):
         self.library_view = LibraryView()
         self.pdf_view = PDFReaderView()
         self.extracts_view = ExtractsView()
+        self.flashcards_view = FlashcardsView()
 
         # Add to stack
         self.stacked_widget.addWidget(self.library_view)
         self.stacked_widget.addWidget(self.pdf_view)
         self.stacked_widget.addWidget(self.extracts_view)
+        self.stacked_widget.addWidget(self.flashcards_view)
         
         # Track current PDF
         self.current_pdf_path = None
@@ -164,7 +195,7 @@ class MainWindow(QMainWindow):
                 background-color: #3d566e;
             }
         """)
-        self.flashcards_btn.clicked.connect(lambda: self.show_coming_soon("Flashcards"))
+        self.flashcards_btn.clicked.connect(self.show_flashcards)
         layout.addWidget(self.flashcards_btn)
         
         layout.addStretch()
@@ -178,59 +209,24 @@ class MainWindow(QMainWindow):
         sidebar.setLayout(layout)
         return sidebar
     
-    def show_coming_soon(self, feature_name):
-        """Show coming soon message"""
-        QMessageBox.information(
-            self,
-            "Coming Soon",
-            f"{feature_name} feature is under development.\n\nStay tuned!"
-        )
-    
+    def _set_active_sidebar(self, active_btn):
+        """Highlight one sidebar button and idle the other three (#55)."""
+        for btn in (
+            self.library_btn,
+            self.pdf_reader_btn,
+            self.extracts_btn,
+            self.flashcards_btn,
+        ):
+            btn.setStyleSheet(
+                _SIDEBAR_ACTIVE if btn is active_btn else _SIDEBAR_IDLE
+            )
+
     def show_library(self):
         """Show library view"""
         self.stacked_widget.setCurrentWidget(self.library_view)
         self.library_view.load_library()
         self.library_view.setFocus()
-        # Update sidebar highlighting
-        self.library_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-    
-        self.pdf_reader_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: #ecf0f1;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3d566e;
-            }
-        """)
-
-        self.extracts_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: #ecf0f1;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3d566e;
-            }
-        """)
+        self._set_active_sidebar(self.library_btn)
 
     def show_pdf_view(self):
         """Show a PDF view"""
@@ -242,92 +238,21 @@ class MainWindow(QMainWindow):
         self.stacked_widget.setCurrentWidget(self.pdf_view)
         self.pdf_view.reload_extract_captures()
         self.pdf_view.setFocus()
-        # Update sidebar highlighting
-        self.library_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: #ecf0f1;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3d566e;
-            }
-        """)
-    
-        self.pdf_reader_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-
-        self.extracts_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: #ecf0f1;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3d566e;
-            }
-        """)
+        self._set_active_sidebar(self.pdf_reader_btn)
 
     def show_extracts(self):
         """Show the Extracts View and refresh its contents"""
         self.stacked_widget.setCurrentWidget(self.extracts_view)
         self.extracts_view.refresh()
         self.extracts_view.setFocus()
-        # Update sidebar highlighting
-        self.library_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: #ecf0f1;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3d566e;
-            }
-        """)
+        self._set_active_sidebar(self.extracts_btn)
 
-        self.pdf_reader_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #34495e;
-                color: #ecf0f1;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-            }
-            QPushButton:hover {
-                background-color: #3d566e;
-            }
-        """)
-
-        self.extracts_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+    def show_flashcards(self):
+        """Show the Flashcards View and refresh its contents"""
+        self.stacked_widget.setCurrentWidget(self.flashcards_view)
+        self.flashcards_view.refresh()
+        self.flashcards_view.setFocus()
+        self._set_active_sidebar(self.flashcards_btn)
     
     def db_conn(self):
         """The library view's sqlite connection, extracts schema ensured."""

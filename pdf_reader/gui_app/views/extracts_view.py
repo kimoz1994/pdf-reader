@@ -29,6 +29,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QSizePolicy,
     QMenu,
+    QDialog,
+    QLineEdit,
 )
 from PyQt6.QtCore import Qt, QBuffer, QItemSelectionModel, QIODevice, QUrl, pyqtSignal
 from PyQt6.QtGui import (
@@ -45,6 +47,7 @@ from PyQt6.QtGui import (
 
 from services.extract_store import (
     IMG_PLACEHOLDER,
+    create_flashcard,
     delete_extract,
     display_title,
     list_docs_with_extracts,
@@ -53,6 +56,7 @@ from services.extract_store import (
     save_extract_text,
     set_capture_display_w,
 )
+from services.selection_snapshot import snapshot_selection
 
 
 def _doc_label(path, name, doc_id) -> str:
@@ -109,6 +113,8 @@ class _ExtractDocEdit(QTextEdit):
     resize_requested = pyqtSignal(str, object)
     # A clipboard QImage was pasted (#48) — the view inserts + tracks it.
     pasted_image = pyqtSignal(object)
+    # The reader asked for a flashcard from the current selection (#55).
+    make_flashcard_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -233,12 +239,17 @@ class _ExtractDocEdit(QTextEdit):
         caret = self.cursorRect(cursor)
         prefer_start = event.pos().x() >= caret.left()
         url = self._image_url_at_cursor(cursor, prefer_start=prefer_start)
-        if url is None:
-            super().contextMenuEvent(event)
-            return
+        # Built by hand (not super()) so both branches can offer the
+        # flashcard action when a selection exists (#55).
         menu = self.createStandardContextMenu(event.globalPos())
-        menu.addSeparator()
-        menu.addActions(self._image_resize_actions(url))
+        if self.textCursor().hasSelection():
+            menu.addSeparator()
+            make_card = QAction("🃏 Make flashcard…", self)
+            make_card.triggered.connect(self.make_flashcard_requested.emit)
+            menu.addAction(make_card)
+        if url is not None:
+            menu.addSeparator()
+            menu.addActions(self._image_resize_actions(url))
         menu.exec(event.globalPos())
 
     def insertFromMimeData(self, source):
@@ -271,6 +282,60 @@ class _ExtractDocEdit(QTextEdit):
                     )
                     return
         super().keyPressEvent(event)
+
+
+class _FlashcardDialog(QDialog):
+    """Modal Make-flashcard dialog (#55): the selection as the answer,
+    a question field, Add / Cancel. Escape rejects (QDialog default);
+    Add stays disabled while the question is empty."""
+
+    def __init__(self, answer_text, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Make Flashcard")
+        self.setModal(True)
+        self.resize(560, 480)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        layout.addWidget(QLabel("Answer (from your selection):"))
+        self.answer_view = QTextEdit()
+        self.answer_view.setReadOnly(True)
+        self.answer_view.setPlainText(answer_text)
+        self.answer_view.setStyleSheet(
+            "background-color: #f7f7f5; border: 1px solid #d0d0d0;"
+            " border-radius: 6px; padding: 8px; font-size: 14px;"
+        )
+        layout.addWidget(self.answer_view, 1)
+
+        layout.addWidget(QLabel("Question:"))
+        self.question_edit = QLineEdit()
+        self.question_edit.setPlaceholderText(
+            "Ask a question about this answer…"
+        )
+        layout.addWidget(self.question_edit)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        self.add_btn = QPushButton("Add Flashcard")
+        self.add_btn.setEnabled(False)
+        self.add_btn.clicked.connect(self.accept)
+        self.question_edit.textChanged.connect(
+            lambda text: self.add_btn.setEnabled(bool(text.strip()))
+        )
+        buttons.addWidget(self.add_btn)
+        layout.addLayout(buttons)
+
+    def question(self) -> str:
+        return self.question_edit.text()
+
+    def showEvent(self, event):
+        # The question field is autofocused on open (#55).
+        super().showEvent(event)
+        self.question_edit.setFocus()
 
 
 class ExtractsView(QWidget):
@@ -596,6 +661,7 @@ class ExtractsView(QWidget):
         edit.textChanged.connect(self._mark_dirty)
         edit.resize_requested.connect(self._on_image_resize)
         edit.pasted_image.connect(self._on_pasted_image)
+        edit.make_flashcard_requested.connect(self._make_flashcard)
         self.editor_layout.addWidget(edit)
         self._editor_doc_edit = edit
         self.editor_layout.addStretch()
@@ -826,6 +892,47 @@ class ExtractsView(QWidget):
             return
         self._editor_dirty = True
         self.save_btn.setEnabled(True)
+
+    def _make_flashcard(self):
+        """Right-click → 🃏 Make flashcard… (#55): snapshot the live
+        selection (editor buffer — saved or unsaved state alike), let the
+        reader type a question, and persist one card. The answer is a
+        copy: later Extract edits never touch it."""
+        if not self._editor_open or self._editor_doc_edit is None:
+            return
+        cursor = self._editor_doc_edit.textCursor()
+        if not cursor.hasSelection():
+            return
+        # Image blobs come back with the text snapshot but are persisted
+        # only with image flashcards (#56) — text cards store the
+        # placeholder alone for now.
+        answer_text, _image_blobs = snapshot_selection(
+            self._editor_doc_edit.document(), cursor
+        )
+        if not answer_text.strip():
+            window = self.window()
+            if hasattr(window, "statusBar"):
+                window.statusBar().showMessage("Nothing to flash here", 5000)
+            return
+        conn = self._db_conn()
+        if conn is None:
+            return
+        dialog = _FlashcardDialog(answer_text, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        question = dialog.question().strip()
+        if not question:
+            return
+        create_flashcard(
+            conn,
+            question=question,
+            answer_text=answer_text,
+            extract_id=self._editor_extract_id,
+            doc_id=self._editor_doc_id,
+        )
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage("Flashcard added", 5000)
 
     def _save_editor(self):
         """Persist the whole joined document (shared by the Save button

@@ -36,6 +36,10 @@ The full-area editing surface for one Extract: **ONE continuous document** — t
 **Status**: joined editing (ticket #32 — shipped): the Extract's text is one blob (`extracts.text_content`) typed into as a single document, word-wrapped, `Ctrl+Z` spanning the whole Extract. **Save** persists mid-session; **Back** auto-saves. Emptying the whole text is allowed and never removes the Extract.
 _Avoid_: per-capture editor boxes (retired), inline editor (retired), rich text (formatting is out of scope for now).
 
+### Flashcard
+A question paired with an **answer snapshot** — a copy of the text selected in the Extract Editor, taken at creation (inline images marked U+FFFC; their blobs are stored per card once image flashcards ship, #56). The snapshot is **immutable**: later edits to the source Extract never change the card. Created from the editor's right-click menu (**🃏 Make flashcard…** → modal dialog), listed in the **Flashcards View** (question, source document, created, next due). Scheduling fields exist from day one (`due_utc` ISO-8601 UTC — a fresh card is due immediately; `fsrs_json` NULL until the FSRS scheduler lands, #58). Cards survive their source: an orphaned card shows no source instead of disappearing.
+_Avoid_: deck (no decks yet), note (that's an Extract).
+
 ### Un-extract
 The act of deleting an Extract from the reader (`d`) or deleting it in the Extracts View. **Irreversible** — there is no undo and no soft delete in either view. Both paths show a confirmation prompt before the delete happens.
 
@@ -65,9 +69,11 @@ Dismissing all pending Highlights (`Esc`) without committing anything. The Worki
 - `captures` rows: `id`, `extract_id`, `page`, `rect` ('x0,y0,x1,y1' PDF-space), `kind`, `text_content` (always NULL — captures are anchors, never text), `image_blob` (kind='image', stored as PNG so extracts are PDF-independent).
 - Pre-blob databases migrate once on `init_schema`: per-capture text is folded into the blob (capture-id order, images as placeholders) and capture text is NULLed. Idempotent via a column-existence check.
 - Image blobs are stored as PNG (lossless; study material is text-heavy).
+- Flashcards live in `library.db` too: `flashcards(id, extract_id, doc_id — all nullable so cards survive source removal, question, answer_text, created_at, fsrs_json, due_utc)`; image blobs per card in `flashcard_images`, ratings in `review_logs` (both schema-ready, written from #56/#58).
 
 ## Status
 - Created at start of grilling round 3. All terms settled through round 8.
 - PR ① scope: capture flow (`e`/`Esc`/`d`-twice) + blue re-draw + Extracts View hierarchy + delete. No editing, no jump-back.
 - PR ② scope: editing (text replacement, editor undo) + jump-back (routed through MainWindow).
 - Superseded by spec #22, which shipped as issues #23 (previews), #24 (editor read), #25 (editor editing); reader back-nav landed separately (#28). Old PR-②-era issues (#10, #13, #14, #15, #19, #21) are closed as superseded.
+- Flashcards floor shipped as spec #54 / issue #55 (schema, store, selection-snapshot seam, editor dialog, card list); review session, row actions and the docs pass are tracked as #56–#63.

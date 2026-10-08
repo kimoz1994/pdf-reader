@@ -8,7 +8,7 @@ A friendly, example-driven guide to everything the app can do today. Follow it t
 .\run.ps1
 ```
 
-You'll see three buttons on the left: **📖 Library**, **📝 Extracts**, **🃏 Flashcards** (placeholder — not ready yet).
+You'll see three buttons on the left: **📖 Library**, **📝 Extracts**, **🃏 Flashcards** (create + list — the review session comes later).
 
 ---
 
@@ -107,7 +107,22 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
 | Extracts view | Delete an Extract | select → 🗑️ Delete Selected (confirm) |
+| Extract editor | Turn the selection into a flashcard | select → right-click → 🃏 Make flashcard… → type question → **Add Flashcard** |
+| Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
 | Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
+
+---
+
+## Flashcards (make & list)
+
+Turn any passage you selected into a flashcard:
+
+1. Open an Extract in the **Extract Editor** (double-click its row).
+2. Select the text that should become the **answer**.
+3. Right-click the selection → **🃏 Make flashcard…**
+4. Type your **question** and press **Add Flashcard** (or `Esc` to cancel — nothing is stored).
+
+The answer is copied at that moment: editing the Extract afterwards never changes the card. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — with removed sources marked honestly.
 
 ---
 
@@ -115,6 +130,6 @@ Everything — your library, your read position, your blue extracts — lives in
 
 These are designed and queued — don't look for them in the app today:
 
-- **Flashcards** (sidebar button says “coming soon”)
+- **Flashcard review session** (grading Again/Hard/Good/Easy, FSRS scheduling, due-today filtering) — cards can be created and listed today; reviewing them is queued.
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).
