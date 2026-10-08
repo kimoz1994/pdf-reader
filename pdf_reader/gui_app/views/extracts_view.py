@@ -36,6 +36,8 @@ from PyQt6.QtCore import Qt, QBuffer, QItemSelectionModel, QIODevice, QUrl, pyqt
 from PyQt6.QtGui import (
     QBrush,
     QColor,
+    QKeySequence,
+    QShortcut,
     QImage,
     QAction,
     QTextCursor,
@@ -261,6 +263,15 @@ class _ExtractDocEdit(QTextEdit):
         reset.triggered.connect(lambda: self.resize_requested.emit(url, None))
         return [bigger, smaller, reset]
 
+    def has_selection(self) -> bool:
+        return bool(self.textCursor().hasSelection())
+
+    def request_flashcard(self):
+        """The ONE gated action path shared by the entry points
+        (right-click #55, Ctrl+K #57): emit only when selected."""
+        if self.has_selection():
+            self.make_flashcard_requested.emit()
+
     def contextMenuEvent(self, event):
         cursor = self.cursorForPosition(event.pos())
         # Click right of the caret -> the image starting there; left of
@@ -272,10 +283,10 @@ class _ExtractDocEdit(QTextEdit):
         # flashcard action when a selection exists (#55).
         menu = self.createStandardContextMenu(event.globalPos())
         menu.setStyleSheet(_CONTEXT_MENU_CSS)
-        if self.textCursor().hasSelection():
+        if self.has_selection():
             menu.addSeparator()
             make_card = QAction("🃏 Make flashcard…", self)
-            make_card.triggered.connect(self.make_flashcard_requested.emit)
+            make_card.triggered.connect(self.request_flashcard)
             menu.addAction(make_card)
         if url is not None:
             menu.addSeparator()
@@ -304,8 +315,7 @@ class _ExtractDocEdit(QTextEdit):
             event.key() == Qt.Key.Key_K
             and event.modifiers() == Qt.KeyboardModifier.ControlModifier
         ):
-            if self.textCursor().hasSelection():
-                self.make_flashcard_requested.emit()
+            self.request_flashcard()
             return
         key = event.key()
         bigger = key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal)
@@ -577,6 +587,20 @@ class ExtractsView(QWidget):
             "font-size: 22px; font-weight: bold; color: #3498db;"
         )
         ed.addWidget(self.editor_title)
+
+        # Ctrl+K entry (#57) with a page-wide context: fires with focus
+        # anywhere on the editor page (editor, Save, Back) and routes to
+        # the same gated handler as the toolbar button; the editor's
+        # keyPressEvent covers the case where QTextEdit claims the key
+        # first — the two can never both fire, and both end at
+        # _make_flashcard.
+        self.ctrl_k_shortcut = QShortcut(
+            QKeySequence("Ctrl+K"), self.editor_page
+        )
+        self.ctrl_k_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.ctrl_k_shortcut.activated.connect(self._make_flashcard)
 
         self.editor_scroll = QScrollArea()
         self.editor_scroll.setWidgetResizable(True)
@@ -974,7 +998,7 @@ class ExtractsView(QWidget):
         selection — enabled only while there is one."""
         edit = self._editor_doc_edit
         self.flashcard_btn.setEnabled(
-            edit is not None and bool(edit.textCursor().hasSelection())
+            edit is not None and edit.has_selection()
         )
 
     def _make_flashcard(self):
