@@ -58,7 +58,7 @@ from services.extract_store import (
     save_extract_text,
     set_capture_display_w,
 )
-from services.selection_snapshot import snapshot_selection
+from services.selection_snapshot import snapshot_image, snapshot_selection
 
 
 def _doc_label(path, name, doc_id) -> str:
@@ -93,6 +93,9 @@ _IMG_MAX_W = 860
 _IMG_W_MIN = 100
 _IMG_W_MAX = 4000
 _RESIZE_STEP = 60
+# Preview cap for answer images inside the Make-flashcard dialog (#56):
+# a huge capture is scaled down to this width; aspect kept.
+_FC_PREVIEW_W = 480
 
 # Readable context menu over the light editor paper: the menu inherits
 # the paper background from `editor_doc`'s stylesheet while its text
@@ -146,6 +149,8 @@ class _ExtractDocEdit(QTextEdit):
     pasted_image = pyqtSignal(object)
     # The reader asked for a flashcard from the current selection (#55).
     make_flashcard_requested = pyqtSignal()
+    # …or from the image under the cursor, with no text selection (#56).
+    make_flashcard_image_requested = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -291,6 +296,17 @@ class _ExtractDocEdit(QTextEdit):
             make_card.setShortcut(QKeySequence("Ctrl+K"))
             make_card.triggered.connect(self.request_flashcard)
             menu.addAction(make_card)
+        elif url is not None:
+            # Image alone, no drag (#56): the image is the whole answer.
+            # elif — a selection already owns the flashcard action above.
+            menu.addSeparator()
+            make_card = QAction("🃏 Make flashcard from image…", self)
+            make_card.triggered.connect(
+                lambda: self.make_flashcard_image_requested.emit(url)
+            )
+            menu.addAction(make_card)
+        # Separate `if`: the resize actions show for the image even when
+        # a selection (flashcard action) is present.
         if url is not None:
             menu.addSeparator()
             menu.addActions(self._image_resize_actions(url))
@@ -340,9 +356,11 @@ class _ExtractDocEdit(QTextEdit):
 class _FlashcardDialog(QDialog):
     """Modal Make-flashcard dialog (#55): the selection as the answer,
     a question field, Add / Cancel. Escape rejects (QDialog default);
-    Add stays disabled while the question is empty."""
+    Add stays disabled while the question is empty. Answer images render
+    inline from their blobs (#56) — the same U+FFFC walk the Extract
+    Editor uses, so the preview shows pictures, not boxes."""
 
-    def __init__(self, answer_text, parent=None):
+    def __init__(self, answer_text, image_blobs=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Make Flashcard")
         self.setModal(True)
@@ -354,7 +372,6 @@ class _FlashcardDialog(QDialog):
         layout.addWidget(QLabel("Answer (from your selection):"))
         self.answer_view = QTextEdit()
         self.answer_view.setReadOnly(True)
-        self.answer_view.setPlainText(answer_text)
         self.answer_view.setStyleSheet(
             # Explicit color: without it the OS dark-mode palette paints
             # white text on this light paper → invisible (#55 follow-up,
@@ -363,6 +380,7 @@ class _FlashcardDialog(QDialog):
             " border: 1px solid #d0d0d0;"
             " border-radius: 6px; padding: 8px; font-size: 14px;"
         )
+        self._fill_answer(answer_text, image_blobs or [])
         layout.addWidget(self.answer_view, 1)
 
         layout.addWidget(QLabel("Question:"))
@@ -391,6 +409,40 @@ class _FlashcardDialog(QDialog):
 
     def question(self) -> str:
         return self.question_edit.text()
+
+    def _fill_answer(self, answer_text, image_blobs):
+        """Write the snapshot into the preview: plain text, with each
+        U+FFFC replaced by its blob (#56). Blobs are consumed in order;
+        a placeholder with no blob left (or an undecodable one) stays a
+        literal U+FFFC — same pairing rule as the snapshot seam."""
+        cursor = self.answer_view.textCursor()
+        blob_iter = iter(image_blobs)
+        for part in answer_text.split(IMG_PLACEHOLDER):
+            if part:
+                cursor.insertText(part)
+            blob = next(blob_iter, None)
+            if blob is not None:
+                image = QImage.fromData(blob)
+                if not image.isNull():
+                    url = f"fcpreview://{id(blob):x}"
+                    self.answer_view.document().addResource(
+                        QTextDocument.ResourceType.ImageResource,
+                        QUrl(url),
+                        image,
+                    )
+                    fmt = QTextImageFormat()
+                    fmt.setName(url)
+                    if image.width() > _FC_PREVIEW_W:
+                        fmt.setWidth(_FC_PREVIEW_W)
+                        fmt.setHeight(
+                            round(image.height() * _FC_PREVIEW_W / image.width())
+                        )
+                    cursor.insertImage(fmt)
+                else:
+                    cursor.insertText(IMG_PLACEHOLDER)
+        # answer_text ends with a placeholder -> the split's last chunk
+        # is "" and the loop above already consumed every blob; nothing
+        # further to append.
 
     def _submit_if_ready(self):
         if self.add_btn.isEnabled():
@@ -580,7 +632,11 @@ class ExtractsView(QWidget):
             QPushButton:disabled { color: #bdc3c7; border-color: #bdc3c7; }
             """
         )
-        self.flashcard_btn.clicked.connect(self._make_flashcard)
+        self.flashcard_btn.clicked.connect(
+            # clicked() passes `checked` — never feed it to the slot's
+            # image_url parameter (#56 review finding).
+            lambda _checked=False: self._make_flashcard()
+        )
         back_row.addWidget(self.flashcard_btn)
         back_row.addStretch()
         ed.addLayout(back_row)
@@ -764,6 +820,7 @@ class ExtractsView(QWidget):
         edit.resize_requested.connect(self._on_image_resize)
         edit.pasted_image.connect(self._on_pasted_image)
         edit.make_flashcard_requested.connect(self._make_flashcard)
+        edit.make_flashcard_image_requested.connect(self._make_flashcard)
         edit.selectionChanged.connect(self._sync_flashcard_btn)
         self.editor_layout.addWidget(edit)
         self._editor_doc_edit = edit
@@ -1004,22 +1061,25 @@ class ExtractsView(QWidget):
             edit is not None and edit.has_selection()
         )
 
-    def _make_flashcard(self):
-        """Right-click → 🃏 Make flashcard… (#55): snapshot the live
+    def _make_flashcard(self, image_url=None):
+        """Right-click → 🃏 Make flashcard… (#55/#56): snapshot the live
         selection (editor buffer — saved or unsaved state alike), let the
         reader type a question, and persist one card. The answer is a
-        copy: later Extract edits never touch it."""
+        copy: later Extract edits never touch it. `image_url` is the
+        image-alone path (#56): right-clicked image, no text selection."""
         if not self._editor_open or self._editor_doc_edit is None:
             return
-        cursor = self._editor_doc_edit.textCursor()
-        if not cursor.hasSelection():
-            return
-        # Image blobs come back with the text snapshot but are persisted
-        # only with image flashcards (#56) — text cards store the
-        # placeholder alone for now.
-        answer_text, _image_blobs = snapshot_selection(
-            self._editor_doc_edit.document(), cursor
-        )
+        if image_url is not None:
+            answer_text, image_blobs = snapshot_image(
+                self._editor_doc_edit.document(), image_url
+            )
+        else:
+            cursor = self._editor_doc_edit.textCursor()
+            if not cursor.hasSelection():
+                return
+            answer_text, image_blobs = snapshot_selection(
+                self._editor_doc_edit.document(), cursor
+            )
         if not answer_text.strip():
             window = self.window()
             if hasattr(window, "statusBar"):
@@ -1028,7 +1088,7 @@ class ExtractsView(QWidget):
         conn = self._db_conn()
         if conn is None:
             return
-        dialog = _FlashcardDialog(answer_text, self)
+        dialog = _FlashcardDialog(answer_text, image_blobs, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         question = dialog.question().strip()
@@ -1040,6 +1100,7 @@ class ExtractsView(QWidget):
             answer_text=answer_text,
             extract_id=self._editor_extract_id,
             doc_id=self._editor_doc_id,
+            image_blobs=image_blobs,
         )
         window = self.window()
         if hasattr(window, "statusBar"):

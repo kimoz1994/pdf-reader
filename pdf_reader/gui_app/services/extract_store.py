@@ -648,13 +648,16 @@ def create_flashcard(
     extract_id: Optional[int] = None,
     doc_id: Optional[int] = None,
     due_utc: Optional[str] = None,
+    image_blobs: Optional[List[bytes]] = None,
 ) -> int:
     """Persist one new flashcard; returns its id.
 
     `answer_text` is the immutable snapshot taken from the editor's
-    selection (images as U+FFFC — blobs go to `flashcard_images`, #56).
-    `fsrs_json` stays NULL until the scheduler lands (#58); `due_utc`
-    defaults to now so a fresh card is immediately due for review (#54).
+    selection (images as U+FFFC). `image_blobs` are the PNG bytes of
+    those images in placeholder order — copied into card-owned storage
+    so the card survives source removal (#56); a text-only card passes
+    none. `fsrs_json` stays NULL until the scheduler lands (#58);
+    `due_utc` defaults to now so a fresh card is immediately due (#54).
     """
     if due_utc is None:
         due_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -665,8 +668,27 @@ def create_flashcard(
         """,
         (extract_id, doc_id, question, answer_text, due_utc),
     )
+    fc_id = cur.lastrowid
+    for idx, blob in enumerate(image_blobs or []):
+        conn.execute(
+            "INSERT INTO flashcard_images (flashcard_id, idx, blob) VALUES (?, ?, ?)",
+            (fc_id, idx, blob),
+        )
     conn.commit()
-    return cur.lastrowid
+    return fc_id
+
+
+def get_flashcard_images(conn, flashcard_id: int) -> List[bytes]:
+    """The card-owned image blobs, in placeholder order (#56).
+
+    Bytes, not references: the source Document/Extract may be gone and
+    the card still renders.
+    """
+    rows = conn.execute(
+        "SELECT blob FROM flashcard_images WHERE flashcard_id = ? ORDER BY idx",
+        (flashcard_id,),
+    ).fetchall()
+    return [r[0] for r in rows]
 
 
 def list_flashcards(conn) -> List[Flashcard]:

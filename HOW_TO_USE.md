@@ -108,6 +108,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
 | Extracts view | Delete an Extract | select → 🗑️ Delete Selected (confirm) |
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
+| Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
 | Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
 
@@ -118,11 +119,11 @@ Everything — your library, your read position, your blue extracts — lives in
 Turn any passage you selected into a flashcard:
 
 1. Open an Extract in the **Extract Editor** (double-click its row).
-2. Select the text that should become the **answer**.
-3. Open the dialog — any of: press `Ctrl+K`, right-click the selection → **🃏 Make flashcard…**, or click **🃏 Make flashcard** in the editor toolbar (all three work only while a selection exists).
+2. Select the text that should become the **answer** — text, images, or both (a drag across text and images captures everything in between, in document order).
+3. Open the dialog — any of: press `Ctrl+K`, right-click the selection → **🃏 Make flashcard…**, or click **🃏 Make flashcard** in the editor toolbar (all three work only while a selection exists). To flash a **single image without dragging**, just right-click it → **🃏 Make flashcard from image…**.
 4. Type your **question** and press `Enter` (or **Add Flashcard**); `Esc` cancels — nothing is stored.
 
-The answer is copied at that moment: editing the Extract afterwards never changes the card. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — with removed sources marked honestly.
+The answer is copied at that moment — text and image bytes alike — so editing the Extract afterwards never changes the card, and the card still shows its images even if the source document is removed. The dialog's answer preview displays the images inline, not just placeholder boxes. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — with removed sources marked honestly.
 
 ---
 

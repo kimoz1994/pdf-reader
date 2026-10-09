@@ -14,6 +14,7 @@ from services.extract_store import (
     delete_extract,
     display_title,
     displayed_image_count,
+    get_flashcard_images,
     init_schema,
     list_docs_with_extracts,
     list_extracts_for_doc,
@@ -1228,3 +1229,52 @@ def test_create_flashcard_allows_null_source(conn):
     assert cards[0].extract_id is None
     assert cards[0].doc_id is None
     assert cards[0].source_name is None
+
+
+def test_create_flashcard_persists_image_blobs_in_order(conn):
+    """(#56) Image bytes are copied into card-owned storage, one row per
+    blob, indexed in snapshot order — not references to the source."""
+    fc_id = create_flashcard(
+        conn,
+        question="What is in the figure?",
+        answer_text=f"See {IMG_PLACEHOLDER} and {IMG_PLACEHOLDER}",
+        image_blobs=[b"\x89PNG-first", b"\x89PNG-second"],
+    )
+    assert get_flashcard_images(conn, fc_id) == [b"\x89PNG-first", b"\x89PNG-second"]
+
+
+def test_create_flashcard_without_blobs_stores_none(conn):
+    fc_id = create_flashcard(conn, "Q", "plain text answer")
+    assert get_flashcard_images(conn, fc_id) == []
+
+
+def test_flashcard_image_blob_fidelity(conn):
+    """(#56 AC) The stored bytes are byte-identical to the snapshot —
+    a mixed answer's PNG survives the round-trip untouched."""
+    png = bytes(range(256)) * 4
+    fc_id = create_flashcard(
+        conn, "Q", f"caption {IMG_PLACEHOLDER}", image_blobs=[png]
+    )
+    assert get_flashcard_images(conn, fc_id) == [png]
+
+
+def test_flashcard_images_survive_source_removal(conn):
+    """(#56) Card-owned copies: deleting the source Document row never
+    touches the blobs — the card still renders alone."""
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn, doc_id, [Capture(1, (0, 0, 1, 1), "image", image_blob=b"src")]
+    )
+    fc_id = create_flashcard(
+        conn,
+        "Q",
+        IMG_PLACEHOLDER,
+        extract_id=eid,
+        doc_id=doc_id,
+        image_blobs=[b"card-owned"],
+    )
+    conn.execute("DELETE FROM extracts WHERE id = ?", (eid,))
+    conn.execute("DELETE FROM pdfs WHERE id = ?", (doc_id,))
+    conn.commit()
+
+    assert get_flashcard_images(conn, fc_id) == [b"card-owned"]
