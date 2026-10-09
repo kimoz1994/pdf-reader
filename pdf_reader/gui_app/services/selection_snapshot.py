@@ -58,6 +58,21 @@ def snapshot_selection(
     return "\n".join(chunks), blobs
 
 
+def snapshot_image(
+    document: QTextDocument, url: str
+) -> Tuple[str, List[bytes]]:
+    """The image a document resource URL names, as a one-image snapshot
+    (#56): (U+FFFC, [png]) — the image-alone path when the user
+    right-clicks an image without dragging a selection. ("", []) when
+    the resource is missing or not re-encodable.
+    """
+    image = document.resource(QTextDocument.ResourceType.ImageResource, QUrl(url))
+    blob = _encode_png(image)
+    if blob is None:
+        return "", []
+    return IMG_PLACEHOLDER, [blob]
+
+
 def _snapshot_block(
     document: QTextDocument, block: QTextBlock, overlap_start: int, overlap_end: int
 ) -> Tuple[str, List[bytes]]:
@@ -97,6 +112,11 @@ def _image_blob(
     if not isinstance(name, str) or not name:
         return None
     image = document.resource(QTextDocument.ResourceType.ImageResource, QUrl(name))
+    return _encode_png(image)
+
+
+def _encode_png(image) -> Optional[bytes]:
+    """A QImage as PNG bytes; None when missing or unencodable."""
     if not isinstance(image, QImage) or image.isNull():
         return None
     buf = QBuffer()

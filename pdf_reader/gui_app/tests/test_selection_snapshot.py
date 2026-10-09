@@ -10,7 +10,7 @@ from PyQt6.QtGui import QImage, QTextCursor, QTextDocument, QTextImageFormat
 from PyQt6.QtWidgets import QApplication
 
 from services.extract_store import IMG_PLACEHOLDER
-from services.selection_snapshot import snapshot_selection
+from services.selection_snapshot import snapshot_image, snapshot_selection
 
 
 @pytest.fixture(scope="module")
@@ -107,3 +107,17 @@ def test_selection_without_image_has_no_placeholders_or_blobs(app):
     doc = _doc_with_two_images(app)
     # only "B" (position 2..3)
     assert snapshot_selection(doc, _select(QTextCursor(doc), 2, 3)) == ("B", [])
+
+
+def test_snapshot_image_by_url_returns_placeholder_and_blob(app):
+    """(#56) Image-alone flashcard: one URL in, one U+FFFC + one PNG out."""
+    doc = _doc_with_two_images(app)
+    text, blobs = snapshot_image(doc, "img://0")
+    assert text == IMG_PLACEHOLDER
+    assert len(blobs) == 1
+    assert QImage.fromData(blobs[0]).width() == 4
+
+
+def test_snapshot_image_unknown_url_is_empty(app):
+    doc = _doc_with_two_images(app)
+    assert snapshot_image(doc, "img://missing") == ("", [])

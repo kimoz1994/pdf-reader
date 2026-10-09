@@ -147,7 +147,7 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Future work
 
-1. Flashcard review from extracts — creation (right-click / toolbar / `Ctrl+K`, `Enter` submits) and listing shipped (#55/#57); the FSRS review session is next.
+1. Flashcard review from extracts — creation (right-click / toolbar / `Ctrl+K`, `Enter` submits, image and mixed-content snapshots #56) and listing shipped (#55/#57); the FSRS review session is next.
 2. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation
