@@ -26,9 +26,16 @@ We'll use the bundled sample `test.pdf` so you don't need your own file (or add 
 
 1. Click **📖 Library**.
 2. Click **➕ Add PDF** and pick a file (or `pdf_reader/pdfs/test.pdf`).
-3. It appears in the list with its read progress. Click it to open the reader.
+3. It appears in the list with its read progress. **Double-click** it to open the reader.
 
 > Your place is remembered: reopen the same PDF later and you land on the last page you read.
+
+**Remove PDFs from the library** (only from the library — the files on disk are never deleted, and your Extracts and flashcards stay):
+
+1. Tick the **checkbox** on each row you want to remove — or click **☑ Select all** to tick every row at once (it flips to **☐ Clear**).
+2. **🗑️ Remove Selected** shows how many are ticked (e.g. `🗑️ Remove Selected (3)`) and only lights up when at least one is; the stats line under the list shows `— N selected`.
+3. Click it (or press **`Delete`** with the list focused) and confirm: the dialog lists the ticked names behind **Show details** and reminds you the files themselves are untouched.
+4. A file you moved or deleted elsewhere no longer vanishes from the list — it stays marked **⚠ file missing** in orange, so you can tick and remove it like any other row (double-clicking it explains it can't be opened).
 
 ### 2. Navigate like a pro (keyboard-first)
 
@@ -110,7 +117,10 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
-| Library | Add / remove PDFs | ➕ Add PDF / 🗑️ Remove Selected |
+| Library | Add PDFs | ➕ Add PDF |
+| Library | Open a PDF | double-click the row |
+| Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
+| Library | Remove the ticked PDFs | **🗑️ Remove Selected** (confirm) or `Delete` |
 
 ---
 

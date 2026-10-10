@@ -5,50 +5,98 @@ Library View - Fast, professional with responsive layout
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFileDialog, QProgressBar,
-    QFrame, QMenu, QMessageBox, QScrollArea
+    QFrame, QMenu, QMessageBox, QScrollArea, QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 import sqlite3
 from pathlib import Path
 
+# Removal toolbar (#72): label base for the button; `_sync_removal_ui`
+# appends the ticked count when there is one.
+_REMOVE_LABEL = "🗑️ Remove Selected"
+
 
 class PDFItemWidget(QWidget):
-    """Custom widget for PDF item with responsive layout"""
-    
-    def __init__(self, name, path, total_pages, current_page, parent=None):
+    """Custom widget for PDF item with responsive layout.
+
+    Row content (#72): a checkbox that arms the row for removal (its
+    toggled state is pushed up through `check_changed`), the name (with
+    a ⚠ file missing mark when the file is gone) and the progress.
+    Single click anywhere on the row just highlights it — only the
+    checkbox ticks — and a double-click still opens the PDF.
+    """
+
+    check_changed = pyqtSignal(str, bool)  # path, checked
+
+    def __init__(
+        self,
+        name,
+        path,
+        total_pages,
+        current_page,
+        missing=False,
+        parent=None,
+    ):
         super().__init__(parent)
         self.path = path
-        self.setup_ui(name, total_pages, current_page)
-    
-    def setup_ui(self, name, total_pages, current_page):
+        self.setup_ui(name, total_pages, current_page, missing)
+
+    def setup_ui(self, name, total_pages, current_page, missing):
         layout = QHBoxLayout()
         layout.setContentsMargins(15, 12, 15, 12)
-        layout.setSpacing(20)
-        
-        # Left side - PDF name (takes available space)
-        name_label = QLabel(name)
-        name_label.setStyleSheet("color: #ecf0f1; font-size: 15px; font-weight: bold;")
+        layout.setSpacing(14)
+
+        # Left: the removal checkbox (#72)
+        self.checkbox = QCheckBox()
+        self.checkbox.setChecked(False)
+        self.checkbox.setStyleSheet(
+            """
+            QCheckBox { color: #ecf0f1; font-size: 15px; spacing: 8px; }
+            QCheckBox::indicator { width: 18px; height: 18px; }
+            QCheckBox::indicator:unchecked {
+                border: 1px solid #95a5a6;
+                background-color: #2b2b2b;
+            }
+            QCheckBox::indicator:checked {
+                border: 1px solid #2980b9;
+                background-color: #3498db;
+            }
+            """
+        )
+        self.checkbox.toggled.connect(
+            lambda on: self.check_changed.emit(self.path, on)
+        )
+        layout.addWidget(self.checkbox, 0)
+
+        # Middle: PDF name (takes available space)
+        name_label = QLabel(f"{name}  ⚠ file missing" if missing else name)
+        name_label.setStyleSheet(
+            "color: #e67e22; font-size: 15px; font-weight: bold;"
+            if missing
+            else "color: #ecf0f1; font-size: 15px; font-weight: bold;"
+        )
         name_label.setWordWrap(True)
+        self.name_label = name_label
         layout.addWidget(name_label, 1)  # Stretch factor 1
-        
+
         # Right side - Progress info (fixed width, no truncation)
         progress_frame = QFrame()
         progress_layout = QVBoxLayout()
         progress_layout.setContentsMargins(10, 5, 10, 5)
         progress_layout.setSpacing(5)
-        
+
         if total_pages > 0:
             progress = (current_page / total_pages) * 100
         else:
             progress = 0
-        
+
         # Page number
         page_label = QLabel(f"Page {current_page} / {total_pages}")
         page_label.setStyleSheet("color: #3498db; font-size: 14px; font-weight: bold;")
         page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         progress_layout.addWidget(page_label)
-        
+
         # Progress bar
         progress_bar = QProgressBar()
         progress_bar.setValue(int(progress))
@@ -70,10 +118,10 @@ class PDFItemWidget(QWidget):
         progress_bar.setFixedHeight(25)
         progress_bar.setFixedWidth(150)
         progress_layout.addWidget(progress_bar)
-        
+
         progress_frame.setLayout(progress_layout)
         layout.addWidget(progress_frame)
-        
+
         self.setLayout(layout)
         self.setFixedHeight(80)  # Fixed height prevents truncation
 
@@ -83,13 +131,17 @@ class LibraryView(QWidget):
     
     pdf_selected = pyqtSignal(str)
     
-    def __init__(self):
+    def __init__(self, db_path=None):
         super().__init__()
         
-        self.db_path = Path(__file__).parent.parent / "library.db"
+        # `db_path` is a test seam (#72): the app uses the real DB, the
+        # offscreen tests point it at a temp file.
+        self.db_path = Path(db_path) if db_path else (
+            Path(__file__).parent.parent / "library.db"
+        )
         self.init_database()
         
-        self.selected_pdfs = set()
+        self.selected_pdfs = set()  # ticked rows, by path (#72)
         
         self.setup_ui()
         self.load_library()
@@ -143,8 +195,30 @@ class LibraryView(QWidget):
         self.add_btn.clicked.connect(self.add_pdf)
         buttons_layout.addWidget(self.add_btn)
         
-        self.remove_btn = QPushButton("🗑️ Remove Selected")
+        self.select_all_btn = QPushButton("☑ Select all")
+        self.select_all_btn.setFixedHeight(45)
+        self.select_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3d566e;
+            }
+            QPushButton:disabled {
+                color: #7f8c8d;
+            }
+        """)
+        self.select_all_btn.clicked.connect(self.toggle_select_all)
+        buttons_layout.addWidget(self.select_all_btn)
+        
+        self.remove_btn = QPushButton(_REMOVE_LABEL)
         self.remove_btn.setFixedHeight(45)
+        self.remove_btn.setEnabled(False)
         self.remove_btn.setStyleSheet("""
             QPushButton {
                 background-color: #e74c3c;
@@ -156,6 +230,10 @@ class LibraryView(QWidget):
             }
             QPushButton:hover {
                 background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #7f4a44;
+                color: #cfcfcf;
             }
         """)
         self.remove_btn.clicked.connect(self.remove_selected_pdfs)
@@ -192,8 +270,20 @@ class LibraryView(QWidget):
                 background-color: #3d566e;
             }
         """)
-        self.pdf_list.itemClicked.connect(self.on_pdf_clicked)
+        # A plain click only highlights the row (never arms a removal —
+        # that is the checkbox's job); double-click opens the PDF.
         self.pdf_list.itemDoubleClicked.connect(self.on_pdf_double_clicked)
+
+        # Del removes the ticked rows (#72), scoped to this view so it
+        # works anywhere inside the Library but never while another
+        # view has focus.
+        self.delete_shortcut = QShortcut(
+            QKeySequence(Qt.Key.Key_Delete), self
+        )
+        self.delete_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.delete_shortcut.activated.connect(self._delete_key_pressed)
         
         scroll.setWidget(self.pdf_list)
         layout.addWidget(scroll)
@@ -219,12 +309,16 @@ class LibraryView(QWidget):
         pdfs = self.cursor.fetchall()
         
         for pdf_id, path, name, total_pages, current_page in pdfs:
-            if not Path(path).exists():
-                continue
-            
+            # Files that moved or were deleted stay listed, marked, so
+            # they can be ticked and removed (#72) — before, they simply
+            # vanished from the view and could never be cleaned up.
+            missing = not Path(path).exists()
             item = QListWidgetItem()
             
-            widget = PDFItemWidget(name, path, total_pages, current_page)
+            widget = PDFItemWidget(
+                name, path, total_pages, current_page, missing=missing
+            )
+            widget.check_changed.connect(self.on_row_check)
             item.setSizeHint(widget.sizeHint())
             
             item.setData(Qt.ItemDataRole.UserRole, {
@@ -238,23 +332,76 @@ class LibraryView(QWidget):
             self.pdf_list.addItem(item)
             self.pdf_list.setItemWidget(item, widget)
         
-        count = self.pdf_list.count()
-        self.stats_label.setText(f"{count} PDF{'s' if count != 1 else ''} in library")
-    
-    def on_pdf_clicked(self, item: QListWidgetItem):
-        """Handle PDF click - toggle selection"""
-        data = item.data(Qt.ItemDataRole.UserRole)
-        if data:
-            if item.isSelected():
-                self.selected_pdfs.add(data['path'])
-            else:
-                self.selected_pdfs.discard(data['path'])
-    
+        self._sync_removal_ui()
+
+    def _row_widget(self, index: int) -> PDFItemWidget:
+        """The custom row widget at `index` (the list stores items and
+        widgets separately)."""
+        return self.pdf_list.itemWidget(self.pdf_list.item(index))
+
+    def _selected_names(self) -> list:
+        """Filenames of the ticked rows, sorted — what the confirm
+        dialog lists (#72). Read from the items themselves so the list
+        stays the single source of truth for names."""
+        ticked = self.selected_pdfs
+        names = []
+        for i in range(self.pdf_list.count()):
+            data = self.pdf_list.item(i).data(Qt.ItemDataRole.UserRole)
+            if data and data.get("path") in ticked:
+                names.append(data.get("name") or data["path"])
+        return sorted(names)
+
+    def on_row_check(self, path: str, checked: bool):
+        """A row checkbox was ticked/unticked: keep the removal set and
+        the toolbar in step (#72)."""
+        if checked:
+            self.selected_pdfs.add(path)
+        else:
+            self.selected_pdfs.discard(path)
+        self._sync_removal_ui()
+
+    def toggle_select_all(self):
+        """☑ Select all / ☐ Clear, whichever fits the current state."""
+        all_rows = self.pdf_list.count()
+        check = len(self.selected_pdfs) != all_rows
+        for i in range(all_rows):
+            self._row_widget(i).checkbox.setChecked(check)
+        # each setChecked fires on_row_check, which already synced
+
+    def _sync_removal_ui(self):
+        """Remove button, Select all label and the stats line reflect the
+        ticked rows (#72): disabled at 0, count in the text."""
+        n = len(self.selected_pdfs)
+        rows = self.pdf_list.count()
+        self.remove_btn.setEnabled(n > 0)
+        self.remove_btn.setText(
+            f"{_REMOVE_LABEL} ({n})" if n else _REMOVE_LABEL
+        )
+        if rows and n == rows:
+            self.select_all_btn.setText("☐ Clear")
+        else:
+            self.select_all_btn.setText("☑ Select all")
+        self.select_all_btn.setEnabled(rows > 0)
+        stats = f"{rows} PDF{'s' if rows != 1 else ''} in library"
+        if n:
+            stats += f" — {n} selected"
+        self.stats_label.setText(stats)
+
     def on_pdf_double_clicked(self, item: QListWidgetItem):
         """Handle PDF double-click - open immediately"""
         data = item.data(Qt.ItemDataRole.UserRole)
-        if data:
-            self.pdf_selected.emit(data['path'])
+        if not data:
+            return
+        if not Path(data['path']).exists():
+            QMessageBox.warning(
+                self,
+                "File Missing",
+                "This file was moved or deleted, so it cannot be opened.\n\n"
+                "Tick it and use "
+                f"{_REMOVE_LABEL} to clean it from the library.",
+            )
+            return
+        self.pdf_selected.emit(data['path'])
     
     def add_pdf(self):
         """Add new PDF to library"""
@@ -290,35 +437,52 @@ class LibraryView(QWidget):
         except Exception as e:
             print(f"Error adding PDF: {e}")
     
+    def _delete_key_pressed(self):
+        """Del-key handler (#72): silent when nothing is ticked."""
+        if self.selected_pdfs:
+            self.remove_selected_pdfs()
+
     def remove_selected_pdfs(self):
-        """Remove selected PDFs from library"""
+        """Remove the ticked PDFs from the library — from the library
+        only, the files on disk are never touched (#72)."""
         if not self.selected_pdfs:
-            QMessageBox.warning(
-                self, 
-                "No Selection", 
-                "Please select PDFs to remove.\n\nClick on PDFs in the list to select them."
-            )
+            return  # button is disabled and Del is guarded: defense only
+        
+        names = self._selected_names()
+        if not self._confirm_removal(names):
             return
+
+        for path in list(self.selected_pdfs):
+            try:
+                self.cursor.execute("DELETE FROM pdfs WHERE path = ?", (path,))
+            except Exception as e:
+                print(f"Error removing {path}: {e}")
         
-        count = len(self.selected_pdfs)
-        reply = QMessageBox.question(
-            self,
+        self.conn.commit()
+        self.selected_pdfs.clear()
+        self.load_library()
+
+    def _confirm_removal(self, names) -> bool:
+        """The Yes/No dialog for a removal (#72): the count up front, the
+        ticked names behind "Show details", plus what is NOT happening.
+        Split out from `remove_selected_pdfs` so tests can bypass it."""
+        count = len(names)
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
             "Remove PDFs",
-            f"Remove {count} selected PDF{'s' if count > 1 else ''} from library?\n\nThis will not delete the files.",
+            f"Remove {count} selected PDF{'s' if count != 1 else ''} "
+            "from the library?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            self,
         )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            for path in self.selected_pdfs:
-                try:
-                    self.cursor.execute("DELETE FROM pdfs WHERE path = ?", (path,))
-                except Exception as e:
-                    print(f"Error removing {path}: {e}")
-            
-            self.conn.commit()
-            self.selected_pdfs.clear()
-            self.load_library()
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.setInformativeText(
+            "The files on disk are NOT deleted.\n"
+            "Extracts and flashcards made from these PDFs are kept — they "
+            "keep showing the original name."
+        )
+        box.setDetailedText("\n".join(names))
+        return box.exec() == QMessageBox.StandardButton.Yes
     
     def update_progress(self, pdf_path: str, current_page: int):
         """Update progress for a PDF"""
