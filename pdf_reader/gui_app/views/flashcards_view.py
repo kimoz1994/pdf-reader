@@ -1,25 +1,49 @@
 """
-Flashcards View — the card list (#54/#55).
+Flashcards View — the card list + FSRS review session (#54/#55/#58).
 
 One row per card: question, source document, created, next due — read
 from the headless store (`services.extract_store.list_flashcards`). The
-review session (start button, due filtering, grading) lands with the
-FSRS core (#58/#61).
+Review (n) button starts a session over today's set (new + due at any
+point during the local day): a shuffled queue, question first, Space
+(or click) reveals the read-only answer, keys 1-4 grade it through the
+pinned FSRS scheduler and persist the new due date (#58). Due-today
+filtering in the list itself lands with #61.
 """
+import random
 from datetime import datetime, timezone
 
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QTableWidget,
     QTableWidgetItem,
     QAbstractItemView,
     QHeaderView,
+    QPushButton,
+    QTextEdit,
+    QDialog,
 )
 from PyQt6.QtCore import Qt
 
-from services.extract_store import display_title, list_flashcards
+from services.extract_store import (
+    display_title,
+    get_flashcard_images,
+    list_due_cards,
+    list_flashcards,
+    record_review,
+)
+from services.fsrs_scheduler import (
+    RATING_AGAIN,
+    RATING_EASY,
+    RATING_GOOD,
+    RATING_HARD,
+    end_of_local_day_utc,
+    make_scheduler,
+    rate_card,
+)
+from views.flashcard_answer import fill_answer
 
 
 def _format_created(created_at):
@@ -59,6 +83,138 @@ def _source_label(card):
     return display_title(card.source_path, card.source_name or "")
 
 
+class ReviewSessionDialog(QDialog):
+    """The FSRS review session (#58): question → reveal → grade.
+
+    A shuffled queue fixed at session start (the caller passes today's
+    due set); Space or a click reveals the read-only answer (text +
+    card-owned images via the shared renderer); keys 1-4 (or the grade
+    buttons) advance the card through the scheduler and persist via
+    `record_review`. Escape closes early — graded cards stay graded.
+    The scheduler is injected so tests can disable fuzzing (#58 AC).
+    """
+
+    def __init__(self, queue, conn, parent=None, scheduler=None, shuffle=True):
+        super().__init__(parent)
+        self.setWindowTitle("Review Session")
+        self.setModal(True)
+        self.resize(640, 520)
+        self._conn = conn
+        self._queue = list(queue)
+        if shuffle:
+            random.shuffle(self._queue)
+        self._index = 0
+        self._revealed = False
+        self._scheduler = scheduler if scheduler is not None else make_scheduler()
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        self.progress_label = QLabel()
+        self.progress_label.setStyleSheet("color: #888; font-size: 13px;")
+        layout.addWidget(self.progress_label)
+
+        self.question_label = QLabel()
+        self.question_label.setWordWrap(True)
+        self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.question_label.setStyleSheet(
+            "color: #ecf0f1; font-size: 22px; font-weight: bold;"
+            " padding: 20px;"
+        )
+        layout.addWidget(self.question_label, 1)
+
+        self.answer_view = QTextEdit()
+        self.answer_view.setReadOnly(True)
+        # Explicit color: OS dark-mode would paint white text on the
+        # light paper — same fix as the Make-flashcard dialog (#55).
+        self.answer_view.setStyleSheet(
+            "background-color: #f7f7f5; color: #1a1a1a;"
+            " border: 1px solid #d0d0d0;"
+            " border-radius: 6px; padding: 8px; font-size: 14px;"
+        )
+        self.answer_view.hide()
+        layout.addWidget(self.answer_view, 1)
+
+        self.reveal_btn = QPushButton("Show answer (Space)")
+        self.reveal_btn.clicked.connect(self._reveal)
+        layout.addWidget(self.reveal_btn)
+
+        grades = QHBoxLayout()
+        self._grade_buttons = []
+        for key, name, rating in (
+            (Qt.Key.Key_1, "1 Again", RATING_AGAIN),
+            (Qt.Key.Key_2, "2 Hard", RATING_HARD),
+            (Qt.Key.Key_3, "3 Good", RATING_GOOD),
+            (Qt.Key.Key_4, "4 Easy", RATING_EASY),
+        ):
+            btn = QPushButton(name)
+            btn.setEnabled(False)
+            btn.clicked.connect(lambda _=False, r=rating: self._grade(r))
+            grades.addWidget(btn)
+            self._grade_buttons.append((key, btn, rating))
+        layout.addLayout(grades)
+
+        self._show_current()
+
+    # ------------------------------------------------------------
+    # Session loop
+    # ------------------------------------------------------------
+
+    def _show_current(self):
+        if self._index >= len(self._queue):
+            self.accept()
+            return
+        card = self._queue[self._index]
+        self._revealed = False
+        self.progress_label.setText(
+            f"{self._index + 1} of {len(self._queue)}"
+        )
+        self.question_label.setText(card.question or "(no question)")
+        self.answer_view.clear()
+        self.answer_view.hide()
+        self.reveal_btn.show()
+        self.reveal_btn.setEnabled(True)
+        for _, btn, _ in self._grade_buttons:
+            btn.setEnabled(False)
+
+    def _reveal(self):
+        if self._revealed or self._index >= len(self._queue):
+            return
+        card = self._queue[self._index]
+        blobs = get_flashcard_images(self._conn, card.id)
+        fill_answer(self.answer_view, card.answer_text, blobs)
+        self.answer_view.show()
+        self.reveal_btn.hide()
+        self._revealed = True
+        for _, btn, _ in self._grade_buttons:
+            btn.setEnabled(True)
+
+    def _grade(self, rating: int):
+        if not self._revealed or self._index >= len(self._queue):
+            return
+        card = self._queue[self._index]
+        fsrs_json, due = rate_card(
+            card.fsrs_json, rating, scheduler=self._scheduler
+        )
+        record_review(self._conn, card.id, rating, fsrs_json, due)
+        self._index += 1
+        self._show_current()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Space and not self._revealed:
+            self._reveal()
+            event.accept()
+            return
+        if self._revealed:
+            for grade_key, _, rating in self._grade_buttons:
+                if key == grade_key:
+                    self._grade(rating)
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
+
+
 class FlashcardsView(QWidget):
     def __init__(self):
         super().__init__()
@@ -76,9 +232,22 @@ class FlashcardsView(QWidget):
         layout.setContentsMargins(30, 30, 30, 30)
         layout.setSpacing(15)
 
+        header_row = QHBoxLayout()
         header = QLabel("🃏 Flashcards")
         header.setStyleSheet("font-size: 28px; font-weight: bold; color: #3498db;")
-        layout.addWidget(header)
+        header_row.addWidget(header)
+        header_row.addStretch()
+        self.review_btn = QPushButton("▶ Review (0)")
+        self.review_btn.setStyleSheet(
+            "QPushButton { background-color: #27ae60; color: white;"
+            " font-weight: bold; border: none; border-radius: 6px;"
+            " padding: 8px 18px; font-size: 14px; }"
+            "QPushButton:hover { background-color: #2ecc71; }"
+            "QPushButton:disabled { background-color: #555; color: #999; }"
+        )
+        self.review_btn.clicked.connect(self._start_review)
+        header_row.addWidget(self.review_btn)
+        layout.addLayout(header_row)
 
         self.empty_label = QLabel(
             "No flashcards yet.\n\n"
@@ -131,10 +300,33 @@ class FlashcardsView(QWidget):
         self.setLayout(layout)
         self.refresh()
 
+    def _due_cards(self, conn):
+        if conn is None:
+            return []
+        return list_due_cards(conn, end_of_local_day_utc())
+
+    def _start_review(self):
+        conn = self._db_conn()
+        queue = self._due_cards(conn)
+        if conn is None or not queue:
+            return
+        dialog = ReviewSessionDialog(queue, conn, parent=self)
+        dialog.exec()
+        # Grades changed next-due — the list must reflect them.
+        self.refresh()
+
     def refresh(self):
-        """Reload every card, newest-first (the store's order)."""
+        """Reload every card, newest-first (the store's order); update
+        the Review button's due-today count (#58 US26)."""
         conn = self._db_conn()
         cards = list_flashcards(conn) if conn is not None else []
+
+        due = self._due_cards(conn)
+        self.review_btn.setText(f"▶ Review ({len(due)})")
+        self.review_btn.setEnabled(bool(due))
+        self.review_btn.setToolTip(
+            "No cards due today" if not due else ""
+        )
 
         if not cards:
             self.table.setRowCount(0)

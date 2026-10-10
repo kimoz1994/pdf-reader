@@ -765,3 +765,69 @@ def list_flashcards(conn) -> List[Flashcard]:
         )
         for r in rows
     ]
+
+
+def list_due_cards(conn, due_before: datetime) -> List[Flashcard]:
+    """Cards due at or before `due_before` (UTC), same shape as
+    `list_flashcards` (#58).
+
+    The caller owns the day boundary: pass end-of-local-day UTC to get
+    "today's set" — new cards are included for free because
+    `create_flashcard` defaults `due_utc` to now. ISO-8601 UTC strings
+    compare lexicographically, so the range scan is a plain `<=`.
+    """
+    cutoff = due_before.astimezone(timezone.utc).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """
+        SELECT f.id, f.question, f.answer_text, f.created_at, f.due_utc,
+               f.fsrs_json, f.extract_id, f.doc_id,
+               COALESCE(p.name, e.doc_name), p.path
+        FROM flashcards f
+        LEFT JOIN pdfs p ON p.id = f.doc_id
+        LEFT JOIN extracts e ON e.id = f.extract_id
+        WHERE f.due_utc <= ?
+        ORDER BY f.due_utc ASC
+        """,
+        (cutoff,),
+    ).fetchall()
+    return [
+        Flashcard(
+            id=r[0],
+            question=r[1],
+            answer_text=r[2],
+            created_at=r[3],
+            due_utc=r[4],
+            fsrs_json=r[5],
+            extract_id=r[6],
+            doc_id=r[7],
+            source_name=r[8],
+            source_path=r[9],
+        )
+        for r in rows
+    ]
+
+
+def record_review(
+    conn, flashcard_id: int, rating: int, fsrs_json: str, due_utc: datetime
+) -> None:
+    """Persist one grade (#58): the updated FSRS state + due date on the
+    card, and one append-only row in `review_logs`.
+
+    The scheduler math lives outside the store (`services.fsrs_scheduler`);
+    this seam only writes what it is given, so it stays Qt-free and
+    library-free.
+    """
+    due_iso = due_utc.astimezone(timezone.utc).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        UPDATE flashcards
+        SET fsrs_json = ?, due_utc = ?
+        WHERE id = ?
+        """,
+        (fsrs_json, due_iso, flashcard_id),
+    )
+    conn.execute(
+        "INSERT INTO review_logs (flashcard_id, rating) VALUES (?, ?)",
+        (flashcard_id, rating),
+    )
+    conn.commit()
