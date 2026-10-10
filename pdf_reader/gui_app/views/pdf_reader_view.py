@@ -66,6 +66,11 @@ def stroke_rect(painter, rect: QRectF, rgb: tuple, pen_width: int = 3,
     painter.drawRect(rect)
 
 
+# Current search match — green, distinct from Working Set yellow,
+# Extract blue and the orange jump-back flash (#75).
+SEARCH_HIGHLIGHT_RGB = (46, 204, 113)
+
+
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,17 +104,17 @@ class HelpDialog(QDialog):
         shortcuts = [
             ("j / ↓", "Navigation", "Scroll down"),
             ("k / ↑", "Navigation", "Scroll up"),
-            ("n", "Search", "Next match"),
-            ("N", "Search", "Previous match"),
+            ("n", "Search", "Next match while search is open; next page otherwise"),
+            ("N", "Search", "Previous match while search is open; previous page otherwise"),
             ("g g", "Navigation", "Go to top"),
             ("G", "Navigation", "Go to bottom"),
             ("Space", "Navigation", "Page down"),
             ("Backspace", "Navigation", "Page up"),
             ("+ / =", "Zoom", "Zoom in"),
             ("-", "Zoom", "Zoom out"),
-            ("/", "Search", "Open search bar"),
-            ("Enter", "Search", "Jump to next match"),
-            ("Esc", "Search", "Close search"),
+            ("/", "Search", "Open search bar (again = refocus the input)"),
+            ("Enter", "Search", "Run search and jump to the first match; again = next match"),
+            ("Esc", "Search", "Close search (n/N become page navigation again)"),
             ("h", "Hints", "Enter hint mode"),
             ("e", "Extract", "Commit the Working Set as one Extract"),
             ("Esc", "Extract", "Clear the Working Set (yellow highlights)"),
@@ -192,7 +197,7 @@ class SearchHighlightOverlay(QWidget):
     Draws any of:
       - yellow working-set rectangles (transient pre-extract selection)
       - blue extract rectangles (persisted from the DB)
-      - the current search result rect (yellow)
+      - the current search result rect (green, #75)
       - the orange jump-back flash rect (temporary, ~1s)
     """
 
@@ -234,7 +239,7 @@ class SearchHighlightOverlay(QWidget):
             stroke_rect(painter, rect, (255, 255, 0))
 
         if self.current_rect:
-            stroke_rect(painter, self.current_rect, (255, 255, 0))
+            stroke_rect(painter, self.current_rect, SEARCH_HIGHLIGHT_RGB)
 
         # Jump-back flash: orange, on top of everything, temporary
         if self.flash_rect:
@@ -284,16 +289,11 @@ class PDFReaderView(QWidget):
         self._mupdf_doc = None  # cached pymupdf handle for element detection
         self._mupdf_path = None
 
-        self.search_mode = False
         self.current_result_index = -1
         self.search_matches = []  # list of (page_index, rect_pymupdf)
-
-        self.search_timer = QTimer(self)
-        self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(250)
-        self.search_timer.timeout.connect(
-            self.update_pdf_search
-        )
+        # Current match in PDF space, re-mapped on every repaint so the
+        # green highlight tracks scroll/zoom (#75)
+        self._search_region = None
 
         self.last_g_time = 0.0
 
@@ -357,9 +357,6 @@ class PDFReaderView(QWidget):
 
         self.search_bar = SearchBar(self)
         self.search_bar.hide()
-        self.search_bar.search_input.returnPressed.connect(
-            self.on_search_enter
-        )
         self.search_bar.search_input.textChanged.connect(
             self.on_search_text_changed
         )
@@ -557,10 +554,7 @@ class PDFReaderView(QWidget):
             self.current_pdf = pdf_path
             self.last_visible_page = 0
             saved_page = 0
-            self.search_matches = []
-            self.current_result_index = -1
-            self.search_bar.set_match_count(0)
-            self.highlight_overlay.set_current_rect(None)
+            self._reset_search_state()
 
             # Reset extraction workflow state for the new document
             self._reset_extract_state()
@@ -696,12 +690,6 @@ class PDFReaderView(QWidget):
         modifiers = event.modifiers()
         now = time.time()
 
-        # Hint mode trigger
-        if key == Qt.Key.Key_H and modifiers == Qt.KeyboardModifier.NoModifier:
-            self.hint_mode_requested.emit()
-            event.accept()
-            return
-
         # Search bar visible: handle search-specific keys, but allow navigation
         if self.search_bar.isVisible():
             if key == Qt.Key.Key_Escape:
@@ -710,8 +698,23 @@ class PDFReaderView(QWidget):
                 return
 
             if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
-                # Confirm search and move focus to viewer
-                self.confirm_search_and_focus_viewer()
+                # In the input: run the search fresh and jump to match 0;
+                # on the viewer: cycle to the next match (#75)
+                if self.search_bar.search_input.hasFocus():
+                    self.confirm_search_and_focus_viewer()
+                else:
+                    self.next_search_result()
+                event.accept()
+                return
+
+            if (
+                key == Qt.Key.Key_Slash
+                and modifiers
+                == Qt.KeyboardModifier.NoModifier
+            ):
+                # Reopen/refocus the input (a '/' typed into the focused
+                # input never reaches this handler — QLineEdit keeps it)
+                self.open_search()
                 event.accept()
                 return
 
@@ -802,6 +805,13 @@ class PDFReaderView(QWidget):
             return
 
         # Normal viewer mode (search bar not visible)
+        # Hint mode trigger (kept below the search branch so 'h' types
+        # into the search input while the bar is open, #75)
+        if key == Qt.Key.Key_H and modifiers == Qt.KeyboardModifier.NoModifier:
+            self.hint_mode_requested.emit()
+            event.accept()
+            return
+
         if (
             key == Qt.Key.Key_D
             and modifiers == Qt.KeyboardModifier.NoModifier
@@ -978,14 +988,17 @@ class PDFReaderView(QWidget):
         self.search_bar.search_input.setFocus()
         self.search_bar.search_input.selectAll()
 
-    def close_search(self):
-        self.search_timer.stop()
-        self.search_bar.hide()
-        self.search_bar.clear()
+    def _reset_search_state(self):
         self.search_matches = []
         self.current_result_index = -1
+        self._search_region = None
         self.search_bar.set_match_count(0)
         self.highlight_overlay.set_current_rect(None)
+
+    def close_search(self):
+        self.search_bar.hide()
+        self.search_bar.clear()
+        self._reset_search_state()
         self.setFocus()
 
     def confirm_search_and_focus_viewer(self):
@@ -993,42 +1006,40 @@ class PDFReaderView(QWidget):
         if not text:
             self.close_search()
             return
-        # Ensure search is run
-        if not self.search_matches:
-            self.update_pdf_search()
-        # Move focus to viewer so n/N and navigation keys work
-        self.setFocus()
+        # Always run the search fresh — stale results within a debounce
+        # window were impossible to reason about (#75)
+        self.update_pdf_search()
+        if self.search_matches:
+            # Move focus to viewer so n/N and navigation keys work
+            self.setFocus()
+        else:
+            # No match: keep the user in the input, ready to retype
+            inp = self.search_bar.search_input
+            inp.setFocus()
+            inp.selectAll()
 
     def on_search_text_changed(self, text: str):
-        self.search_timer.stop()
+        # Vim-style (#75): nothing runs while typing — only clear state
+        # when the query becomes empty; Enter runs the search.
         if not text.strip():
-            self.search_matches = []
-            self.current_result_index = -1
-            self.search_bar.set_match_count(0)
-            self.highlight_overlay.set_current_rect(None)
-            return
-        self.search_timer.start()
+            self._reset_search_state()
 
     def update_pdf_search(self):
         text = self.search_bar.text().strip()
         if not text or not self.current_pdf:
-            self.search_matches = []
-            self.current_result_index = -1
-            self.search_bar.set_match_count(0)
-            self.highlight_overlay.set_current_rect(None)
+            self._reset_search_state()
             return
 
-        # Search using PyMuPDF
+        # Search using PyMuPDF through the cached handle (no re-open)
         self.search_matches = []
         try:
-            mupdf_doc = pymupdf.open(self.current_pdf)
-            for page_index in range(len(mupdf_doc)):
-                page = mupdf_doc[page_index]
-                rects = page.search_for(text)
-                for rect in rects:
-                    # rect is (x0, y0, x1, y1) in page coordinates
-                    self.search_matches.append((page_index, rect))
-            mupdf_doc.close()
+            mupdf_doc = self._mupdf_doc_handle()
+            if mupdf_doc is not None:
+                for page_index in range(len(mupdf_doc)):
+                    page = mupdf_doc[page_index]
+                    for rect in page.search_for(text):
+                        # rect is in page coordinates
+                        self.search_matches.append((page_index, rect))
         except Exception as e:
             print(f"Search error: {e}")
             self.search_matches = []
@@ -1041,12 +1052,7 @@ class PDFReaderView(QWidget):
             )
             self.go_to_search_result(0)
         else:
-            self.search_bar.set_match_count(0)
-            self.highlight_overlay.set_current_rect(None)
-
-    def on_search_enter(self):
-        # Handled in keyPressEvent
-        pass
+            self._reset_search_state()
 
     def next_search_result(self):
         if not self.search_matches:
@@ -1085,13 +1091,19 @@ class PDFReaderView(QWidget):
             page_index, QPointF(0.0, 0.0), 0.0
         )
 
-        # Compute and set highlight rectangle in widget coordinates
-        self.update_highlight_rect(page_index, rect_mupdf)
+        # Keep the match in PDF space; _refresh_highlights maps it to
+        # widget coords on every repaint so it tracks scroll/zoom (#75)
+        self._search_region = (page_index, rect_mupdf)
 
-    def update_highlight_rect(self, page_index: int, rect_mupdf):
-        # Simplified highlight: for now, just clear it to avoid errors.
-        # We can re-enable precise highlighting in the hint-system iteration.
-        self.highlight_overlay.set_current_rect(None)
+        # Centre the match in the viewport (mirrors focus_region)
+        layout = self._current_layout()
+        if layout is not None:
+            target = center_v_scroll(
+                layout, page_index, tuple(rect_mupdf)
+            )
+            self.pdf_view.verticalScrollBar().setValue(target)
+
+        self._refresh_highlights()
 
     # ------------------------------------------------------------
     # Extraction workflow (Working Set -> Extract)
@@ -1166,12 +1178,13 @@ class PDFReaderView(QWidget):
         )
 
     def _refresh_highlights(self, preview_widget_rect=None):
-        """Recompute widget rects for working set + extracts and repaint."""
+        """Recompute widget rects for working set + extracts + search and repaint."""
         layout = self._current_layout()
         if layout is None:
             self.highlight_overlay.set_working_rects([])
             self.highlight_overlay.set_extract_rects([])
             self.highlight_overlay.set_flash_rect(None)
+            self.highlight_overlay.set_current_rect(None)
             return
         try:
             working = [
@@ -1189,6 +1202,12 @@ class PDFReaderView(QWidget):
                 flash = rect_to_qrectf(
                     layout.pdf_to_widget(flash_page, flash_rect)
                 )
+            current = None
+            if self._search_region is not None:
+                search_page, search_rect = self._search_region
+                current = rect_to_qrectf(
+                    layout.pdf_to_widget(search_page, tuple(search_rect))
+                )
         except Exception:
             return
         if preview_widget_rect is not None:
@@ -1196,6 +1215,7 @@ class PDFReaderView(QWidget):
         self.highlight_overlay.set_working_rects(working)
         self.highlight_overlay.set_extract_rects(extracts)
         self.highlight_overlay.set_flash_rect(flash)
+        self.highlight_overlay.set_current_rect(current)
 
         if self._delete_armed_id is not None:
             self.working_label.setText(
