@@ -46,10 +46,14 @@ In the reader:
 | `j` / `k` (or `↓`/`↑`) | move down / up |
 | `gg` / `G` | jump to top / bottom of the page |
 | `Space` | page down |
-| `/` | search on the page |
+| `/` | search — type, then `Enter` runs it and jumps to the first match (it lights up **green**, centred) |
+| `Enter` / `n` / `N` | with a search active: next / next / previous match (wraps around) |
+| `Esc` | close the search bar (or discard a pending selection) |
 | `+` / `-` | zoom in / out |
 
 Mouse works too — scroll and click as usual.
+
+Search details: nothing runs while you type — press `Enter` to search, `Enter`/`n`/`N` to move between matches, `/` again to jump back into the search box. If no match is found the box stays focused so you can retype. After `Esc`, `n`/`N` go back to being next/previous page.
 
 ### 3. Capture something (the core loop)
 
@@ -71,6 +75,7 @@ Mouse works too — scroll and click as usual.
 
 - 🟡 **Yellow** = selected, not yet saved (Working Set)
 - 🔵 **Blue** = saved Extract (survives restarts)
+- 🟢 **Green** = the current search match
 - 🟠 **Orange flash** = “you are here” marker when you jump to a region (below)
 
 ### 4. Review your extracts
@@ -109,7 +114,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Reader | Save pending selection(s) as an Extract | `e` |
 | Reader | Discard pending selection(s) | `Esc` |
 | Reader | Delete newest Extract on this page | `d` `d` |
-| Reader | Navigate / search / zoom | `j` `k` `gg` `G` `Space` `/` `+` `-` |
+| Reader | Navigate / search / zoom | `j` `k` `gg` `G` `Space` `/` `Enter` `n` `N` `Esc` `+` `-` |
 | Extracts view | Read / edit an Extract | select row → `Enter` / double-click → type → **💾 Save** / **← Back** |
 | Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
