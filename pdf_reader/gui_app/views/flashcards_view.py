@@ -49,11 +49,13 @@ def _format_due(due_utc):
 
 def _source_label(card):
     """Same document naming as the Extracts tree: metadata title when
-    available, cleaned filename otherwise; removed sources marked."""
+    available, cleaned filename otherwise; a removed source keeps the
+    Extract's name snapshot (#70) and is marked the same way the tree
+    marks it — `(source removed)` only when no snapshot exists."""
     if not card.source_path and not card.source_name:
         return "(source removed)"
     if not card.source_path:
-        return card.source_name
+        return f"{card.source_name} ⚠ removed source"
     return display_title(card.source_path, card.source_name or "")
 
 

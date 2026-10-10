@@ -58,8 +58,8 @@ class Flashcard:
     `answer_text` was copied from the Extract Editor's selection at
     creation (images marked U+FFFC, their blobs in `flashcard_images`,
     #56) — later edits to the Extract never touch the card. `source_name`
-    comes from a LEFT JOIN: the source Document may be gone while the
-    card survives.
+    comes from a LEFT JOIN with a `doc_name` fallback: the source
+    Document may be gone while the card and its name survive (#70).
     """
 
     id: int
@@ -70,7 +70,8 @@ class Flashcard:
     fsrs_json: Optional[str] = None  # NULL until the scheduler lands (#58)
     extract_id: Optional[int] = None
     doc_id: Optional[int] = None
-    source_name: Optional[str] = None  # joined from pdfs, None when gone
+    source_name: Optional[str] = None  # from pdfs, or the Extract's
+    # doc_name snapshot when the row is gone (#70)
     source_path: Optional[str] = None  # joined from pdfs, for display_title
 
 
@@ -82,8 +83,10 @@ def init_schema(conn) -> None:
     images as placeholders, then the per-capture text NULLed — captures
     are anchors from here on), adds `captures.display_w` (nullable
     presentation width, #37), relaxes page/rect to nullable for pasted
-    images (#48, atomic table rewrite), and adds/backfills
-    `captures.display_order` (render order, #48). Idempotent via
+    images (#48, atomic table rewrite), adds/backfills
+    `captures.display_order` (render order, #48), and adds/backfills
+    `extracts.doc_name` (the Document's display title, #70 — the tree
+    label survives removal of the pdfs row). Idempotent via
     column-existence checks.
     """
     conn.execute(
@@ -93,7 +96,8 @@ def init_schema(conn) -> None:
             doc_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             type TEXT NOT NULL,
-            text_content TEXT
+            text_content TEXT,
+            doc_name TEXT
         )
         """
     )
@@ -170,6 +174,30 @@ def init_schema(conn) -> None:
                 (_BLOB_SEP.join(elements), eid),
             )
         conn.execute("UPDATE captures SET text_content = NULL WHERE kind = 'text'")
+    if "doc_name" not in cols:
+        # #70: keep the Document's display title on the Extract so the
+        # tree label survives removal of the pdfs row. Backfilled from
+        # the rows still there; Extracts whose row is already gone stay
+        # NULL — their names are unrecoverable and the view keeps the
+        # old marker for them.
+        conn.execute("ALTER TABLE extracts ADD COLUMN doc_name TEXT")
+        has_pdfs = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='pdfs'"
+        ).fetchone()
+        if has_pdfs:
+            for doc_id, path, name in conn.execute(
+                """
+                SELECT DISTINCT e.doc_id, p.path, p.name
+                FROM extracts e
+                LEFT JOIN pdfs p ON p.id = e.doc_id
+                """
+            ).fetchall():
+                if not path:
+                    continue
+                conn.execute(
+                    "UPDATE extracts SET doc_name = ? WHERE doc_id = ?",
+                    (display_title(path, name or ""), doc_id),
+                )
     cap_rows = conn.execute("PRAGMA table_info(captures)").fetchall()
     cap_cols = {r[1]: r for r in cap_rows}
     if "page" in cap_cols and "rect" in cap_cols and (
@@ -254,7 +282,9 @@ def commit_working_set(conn, doc_id: int, captures: List[Capture]) -> Optional[i
 
     The Extract's text blob joins the captures' texts (blank-line separated)
     with one placeholder per image Capture, in capture order. Captures are
-    stored as anchors: their `text_content` is never persisted.
+    stored as anchors: their `text_content` is never persisted. The
+    Document's display title is snapshotted into `doc_name` (#70) so the
+    tree label keeps showing it after the pdfs row is removed.
     """
     if not captures:
         return None
@@ -264,9 +294,13 @@ def commit_working_set(conn, doc_id: int, captures: List[Capture]) -> Optional[i
         for cap in captures
         if cap.kind == "image" or (cap.text_content and cap.text_content.strip())
     ]
+    row = conn.execute(
+        "SELECT path, name FROM pdfs WHERE id = ?", (doc_id,)
+    ).fetchone()
+    doc_name = display_title(row[0], row[1] or "") if row and row[0] else None
     cur = conn.execute(
-        "INSERT INTO extracts (doc_id, type, text_content) VALUES (?, ?, ?)",
-        (doc_id, _derive_type(captures), _BLOB_SEP.join(elements)),
+        "INSERT INTO extracts (doc_id, type, text_content, doc_name) VALUES (?, ?, ?, ?)",
+        (doc_id, _derive_type(captures), _BLOB_SEP.join(elements), doc_name),
     )
     extract_id = cur.lastrowid
 
@@ -408,14 +442,21 @@ def list_docs_with_extracts(conn) -> List[Tuple[int, Optional[str], Optional[str
     """(doc_id, name, path) for Documents that have at least one Extract.
 
     LEFT JOIN: Extracts are independent of the PDF (CONTEXT Q3/r5, #17),
-    so a Document whose pdfs row was removed still appears — name and
-    path come back None and the view marks it as a removed source.
+    so a Document whose pdfs row was removed still appears — path comes
+    back None and the name falls back to the Extract's `doc_name`
+    snapshot (#70) so the tree keeps showing the original title. That
+    snapshot is already a display title (unlike a raw `pdfs.name`), so
+    callers must not run `display_title` over it again. GROUP BY keeps
+    one row per Document even if snapshots disagree; MIN is just a
+    stable pick in that case (all snapshots of a doc are the same
+    title in practice).
     """
     rows = conn.execute(
         """
-        SELECT DISTINCT e.doc_id, p.name, p.path
+        SELECT e.doc_id, COALESCE(p.name, MIN(e.doc_name)), p.path
         FROM extracts e
         LEFT JOIN pdfs p ON p.id = e.doc_id
+        GROUP BY e.doc_id
         ORDER BY e.doc_id
         """
     ).fetchall()
@@ -695,14 +736,17 @@ def list_flashcards(conn) -> List[Flashcard]:
     """All flashcards, newest-first, with the source Document's name.
 
     LEFT JOIN mirrors `list_docs_with_extracts`: the source pdfs row may
-    be gone — the card survives and `source_name` comes back None (#54).
+    be gone — the card survives and the name falls back to its Extract's
+    `doc_name` snapshot (#70), None only when no snapshot exists (#54).
     """
     rows = conn.execute(
         """
         SELECT f.id, f.question, f.answer_text, f.created_at, f.due_utc,
-               f.fsrs_json, f.extract_id, f.doc_id, p.name, p.path
+               f.fsrs_json, f.extract_id, f.doc_id,
+               COALESCE(p.name, e.doc_name), p.path
         FROM flashcards f
         LEFT JOIN pdfs p ON p.id = f.doc_id
+        LEFT JOIN extracts e ON e.id = f.extract_id
         ORDER BY f.id DESC
         """
     ).fetchall()
