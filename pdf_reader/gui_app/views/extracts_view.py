@@ -63,9 +63,14 @@ from services.selection_snapshot import snapshot_image, snapshot_selection
 
 def _doc_label(path, name, doc_id) -> str:
     """Doc-tree title, marked when the source is gone: the pdfs row was
-    removed (path None) or the file is missing on disk (#17). Extracts
-    themselves stay readable either way — content lives in the DB."""
+    removed (path None) — the Extract's `doc_name` snapshot keeps the
+    original title showing (#70) — or the file is missing on disk (#17).
+    Extracts themselves stay readable either way — content lives in the
+    DB. The removed branch prints `name` verbatim: a snapshot is already
+    a display title, never a raw filename."""
     if path is None:
+        if name:
+            return f"{name} ⚠ removed source"
         return f"⚠ Removed source (doc #{doc_id})"
     title = display_title(path, name or "")
     if not Path(path).exists():

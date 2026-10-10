@@ -214,7 +214,8 @@ def test_list_docs_with_extracts(conn):
 
 def test_list_docs_with_extracts_survives_pdf_row_removal(conn):
     """Extracts stay listed after the pdfs row is deleted (Q3/r5, #17);
-    name/path come back None so the view can mark a removed source."""
+    the name survives via the Extract's snapshot so the view keeps
+    showing the original title (#70)."""
     doc_a = seed_pdf(conn, "/tmp/a.pdf", "a.pdf")
     doc_b = seed_pdf(conn, "/tmp/b.pdf", "b.pdf")
     commit_working_set(conn, doc_a, [Capture(0, (0, 0, 1, 1), "text", "a minute")])
@@ -224,7 +225,19 @@ def test_list_docs_with_extracts_survives_pdf_row_removal(conn):
 
     docs = list_docs_with_extracts(conn)
     assert (doc_a, "a.pdf", "/tmp/a.pdf") in docs
-    assert (doc_b, None, None) in docs
+    assert (doc_b, "b", None) in docs
+
+
+def test_commit_working_set_snapshots_doc_name(conn):
+    """(#70) The Extract stores its Document's display title so the tree
+    label survives removal of the pdfs row."""
+    doc_id = seed_pdf(conn, "/tmp/book.pdf", "book.pdf")
+    commit_working_set(conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")])
+
+    assert conn.execute(
+        "SELECT doc_name FROM extracts"
+    ).fetchone()[0] == display_title("/tmp/book.pdf", "book.pdf")
+
 
 def test_set_capture_display_w_preserves_geometry(conn):
     """Presentation width round-trips; page/rect anchors untouched (#37)."""
@@ -272,6 +285,51 @@ def test_init_schema_migrates_display_w():
     cols = {r[1] for r in c.execute("PRAGMA table_info(captures)").fetchall()}
     assert "display_w" in cols
     init_schema(c)  # idempotent: second run is a no-op
+    c.close()
+
+
+def test_init_schema_migrates_doc_name():
+    """Pre-#70 databases gain `extracts.doc_name` and backfill it from
+    the still-existing pdfs rows; Extracts whose row is already gone
+    keep NULL (their names are unrecoverable). Idempotent."""
+    c = sqlite3.connect(":memory:")
+    c.execute(
+        """CREATE TABLE pdfs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            total_pages INTEGER DEFAULT 0,
+            current_page INTEGER DEFAULT 1,
+            last_opened TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE extracts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            type TEXT NOT NULL,
+            text_content TEXT
+        )"""
+    )
+    c.execute("INSERT INTO pdfs (path, name) VALUES ('/tmp/a.pdf', 'a.pdf')")
+    c.execute("INSERT INTO pdfs (path, name) VALUES ('/tmp/b.pdf', 'b.pdf')")
+    for doc_id in (1, 2, 99):  # 99's pdfs row is already gone
+        c.execute(
+            "INSERT INTO extracts (doc_id, type, text_content) VALUES (?, 'text', 'x')",
+            (doc_id,),
+        )
+    init_schema(c)
+
+    cols = {r[1] for r in c.execute("PRAGMA table_info(extracts)").fetchall()}
+    assert "doc_name" in cols
+    names = dict(c.execute("SELECT doc_id, doc_name FROM extracts").fetchall())
+    assert names[1] == "a"
+    assert names[2] == "b"
+    assert names[99] is None
+    init_schema(c)  # idempotent: second run keeps the backfill
+    names = dict(c.execute("SELECT doc_id, doc_name FROM extracts").fetchall())
+    assert names[1] == "a"
     c.close()
 
 
@@ -1206,7 +1264,8 @@ def test_list_flashcards_newest_first(conn):
 
 def test_list_flashcards_survives_source_removal(conn):
     """Cards are independent of their source: removing the pdfs row
-    leaves the card with a None source name (#54 orphan rule)."""
+    leaves the card listed, its name kept by the Extract's snapshot
+    (#54 orphan rule, #70)."""
     doc_id = seed_pdf(conn)
     eid = commit_working_set(
         conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
@@ -1219,7 +1278,8 @@ def test_list_flashcards_survives_source_removal(conn):
 
     cards = list_flashcards(conn)
     assert len(cards) == 1
-    assert cards[0].source_name is None
+    assert cards[0].source_name == "book"
+    assert cards[0].source_path is None
 
 
 def test_create_flashcard_allows_null_source(conn):
