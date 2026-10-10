@@ -88,12 +88,13 @@ MainWindow
 ├── LibraryView       lists documents, opens a PDF
 ├── PdfReaderView     QPdfView-based reader (keys, search, page progress, extraction)
 ├── ExtractsView      Documents → Extracts → Captures review + edit + delete
-└── FlashcardsView    card list: question / source / created / next due (review pending)
+└── FlashcardsView    card list + FSRS review session: Review (n) → question → reveal → grade 1-4
 
 services/             engine modules (element detection, PDF loading, hints)
                        — element_detector is live (image click-capture), the rest dormant
 services/extract_store.py   headless extract/capture/flashcard SQL seam (no Qt), pytest-tested
 services/selection_snapshot.py  editor selection → answer snapshot seam (offscreen Qt), pytest-tested
+services/fsrs_scheduler.py  FSRS scheduling seam over the pinned `fsrs` lib (fuzz on in app, off in tests), pytest-tested
 services/pdf_geometry.py    layout/mapping math mirroring Qt's calculateDocumentLayout
 ```
 
@@ -118,12 +119,12 @@ pdf_reader/
 │   │   │   ├── pdf_geometry.py    Qt-mirroring layout/mapping math
 │   │   │   ├── element_detector.py  live — image click-capture in the reader
 │   │   │   └── (dormant) pdf_loader, hint_generator, hint_overlay, search_engine
-│   │   ├── tests/            pytest (test_extract_store, test_pdf_geometry, test_selection_snapshot)
+│   │   ├── tests/            pytest (test_extract_store, test_pdf_geometry, test_selection_snapshot, test_fsrs_scheduler, test_review_session)
 │   │   └── views/
 │   │       ├── library_view.py
 │   │       ├── pdf_reader_view.py   the core reader
 │   │       ├── extracts_view.py     Documents → Extracts → Captures + edit + delete
-│   │       └── flashcards_view.py   card list (review session pending)
+│   │       └── flashcards_view.py   card list + FSRS review session
 │   └── pdfs/test.pdf         sample document
 ```
 
@@ -147,7 +148,7 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Future work
 
-1. Flashcard review from extracts — creation (right-click / toolbar / `Ctrl+K`, `Enter` submits, image and mixed-content snapshots #56) and listing shipped (#55/#57); the FSRS review session is next.
+1. Flashcards: creation, listing, and the FSRS review session core loop shipped (#55/#56/#57/#58). Remaining: session extras (Again re-queue, summary — #59), row actions (edit/delete — #60), due-today list toggle (#61), source jump (#62), docs pass (#63).
 2. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation

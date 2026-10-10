@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import sqlite3
 
@@ -17,9 +17,11 @@ from services.extract_store import (
     get_flashcard_images,
     init_schema,
     list_docs_with_extracts,
+    list_due_cards,
     list_extracts_for_doc,
     list_flashcards,
     preview_for_extract,
+    record_review,
     resolve_doc_id,
     save_extract_text,
     set_capture_display_w,
@@ -1338,3 +1340,80 @@ def test_flashcard_images_survive_source_removal(conn):
     conn.commit()
 
     assert get_flashcard_images(conn, fc_id) == [b"card-owned"]
+
+
+# ---------------------------------------------------------------------
+# Review scheduling (#58): due-today query + review persistence
+# ---------------------------------------------------------------------
+
+
+def _iso(dt):
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def test_list_due_cards_includes_new_and_overdue_excludes_future(conn):
+    """(#58) The due set = anything due at or before the cutoff. New
+    cards (due = creation time) are naturally in; tomorrow's are not."""
+    now = datetime.now(timezone.utc)
+    past = create_flashcard(
+        conn, "old", "a", due_utc=_iso(now - timedelta(days=3))
+    )
+    fresh = create_flashcard(conn, "new", "a")  # due = now
+    tomorrow = create_flashcard(
+        conn, "later", "a", due_utc=_iso(now + timedelta(days=1))
+    )
+    cutoff = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    due = [c.id for c in list_due_cards(conn, cutoff)]
+    assert past in due
+    assert fresh in due
+    assert tomorrow not in due
+
+
+def test_list_due_cards_day_boundary_is_inclusive(conn):
+    """(#58 US19) A card due at 23:59:59 today is in today's set; one
+    due a second after midnight is not — the cutoff is end of local day."""
+    now = datetime.now(timezone.utc)
+    just_before = create_flashcard(
+        conn, "q", "a", due_utc=_iso(now.replace(hour=23, minute=59, second=59))
+    )
+    just_after = create_flashcard(
+        conn,
+        "q2",
+        "a",
+        due_utc=_iso(now.replace(hour=0, minute=0, second=1) + timedelta(days=1)),
+    )
+    cutoff = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    due = [c.id for c in list_due_cards(conn, cutoff)]
+    assert just_before in due
+    assert just_after not in due
+
+
+def test_record_review_persists_state_due_and_log(conn):
+    """(#58) One grade writes fsrs_json + due_utc on the card and one
+    review_logs row; the list reflects the new next-due immediately."""
+    fc_id = create_flashcard(conn, "Q", "A")
+    new_due = datetime.now(timezone.utc) + timedelta(days=1)
+    record_review(conn, fc_id, rating=3, fsrs_json='{"state": 1}', due_utc=new_due)
+
+    card = next(c for c in list_flashcards(conn) if c.id == fc_id)
+    assert card.fsrs_json == '{"state": 1}'
+    assert card.due_utc == _iso(new_due)
+
+    logs = conn.execute(
+        "SELECT flashcard_id, rating FROM review_logs WHERE flashcard_id = ?",
+        (fc_id,),
+    ).fetchall()
+    assert logs == [(fc_id, 3)]
+
+
+def test_record_review_appends_one_log_per_grade(conn):
+    """(#58) Rating twice leaves two log rows — review_logs is the
+    append-only history, never overwritten."""
+    fc_id = create_flashcard(conn, "Q", "A")
+    due = datetime.now(timezone.utc)
+    record_review(conn, fc_id, 1, "{}", due)
+    record_review(conn, fc_id, 3, "{}", due + timedelta(days=1))
+    n = conn.execute(
+        "SELECT COUNT(*) FROM review_logs WHERE flashcard_id = ?", (fc_id,)
+    ).fetchone()[0]
+    assert n == 2

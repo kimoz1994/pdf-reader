@@ -59,6 +59,7 @@ from services.extract_store import (
     set_capture_display_w,
 )
 from services.selection_snapshot import snapshot_image, snapshot_selection
+from views.flashcard_answer import fill_answer
 
 
 def _doc_label(path, name, doc_id) -> str:
@@ -98,9 +99,6 @@ _IMG_MAX_W = 860
 _IMG_W_MIN = 100
 _IMG_W_MAX = 4000
 _RESIZE_STEP = 60
-# Preview cap for answer images inside the Make-flashcard dialog (#56):
-# a huge capture is scaled down to this width; aspect kept.
-_FC_PREVIEW_W = 480
 
 # Readable context menu over the light editor paper: the menu inherits
 # the paper background from `editor_doc`'s stylesheet while its text
@@ -416,38 +414,9 @@ class _FlashcardDialog(QDialog):
         return self.question_edit.text()
 
     def _fill_answer(self, answer_text, image_blobs):
-        """Write the snapshot into the preview: plain text, with each
-        U+FFFC replaced by its blob (#56). Blobs are consumed in order;
-        a placeholder with no blob left (or an undecodable one) stays a
-        literal U+FFFC — same pairing rule as the snapshot seam."""
-        cursor = self.answer_view.textCursor()
-        blob_iter = iter(image_blobs)
-        for part in answer_text.split(IMG_PLACEHOLDER):
-            if part:
-                cursor.insertText(part)
-            blob = next(blob_iter, None)
-            if blob is not None:
-                image = QImage.fromData(blob)
-                if not image.isNull():
-                    url = f"fcpreview://{id(blob):x}"
-                    self.answer_view.document().addResource(
-                        QTextDocument.ResourceType.ImageResource,
-                        QUrl(url),
-                        image,
-                    )
-                    fmt = QTextImageFormat()
-                    fmt.setName(url)
-                    if image.width() > _FC_PREVIEW_W:
-                        fmt.setWidth(_FC_PREVIEW_W)
-                        fmt.setHeight(
-                            round(image.height() * _FC_PREVIEW_W / image.width())
-                        )
-                    cursor.insertImage(fmt)
-                else:
-                    cursor.insertText(IMG_PLACEHOLDER)
-        # answer_text ends with a placeholder -> the split's last chunk
-        # is "" and the loop above already consumed every blob; nothing
-        # further to append.
+        # Shared U+FFFC walk (#56/#58): the review session renders
+        # snapshots with the exact same helper.
+        fill_answer(self.answer_view, answer_text, image_blobs)
 
     def _submit_if_ready(self):
         if self.add_btn.isEnabled():

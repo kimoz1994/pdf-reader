@@ -8,7 +8,7 @@ A friendly, example-driven guide to everything the app can do today. Follow it t
 .\run.ps1
 ```
 
-You'll see three buttons on the left: **📖 Library**, **📝 Extracts**, **🃏 Flashcards** (create + list — the review session comes later).
+You'll see three buttons on the left: **📖 Library**, **📝 Extracts**, **🃏 Flashcards** (create, list and review).
 
 ---
 
@@ -122,6 +122,10 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
+| Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled when none |
+| Review session | Reveal the answer | `Space` (or **Show answer**) |
+| Review session | Grade the card | `1` Again · `2` Hard · `3` Good · `4` Easy (or the buttons) |
+| Review session | Close early | `Esc` (graded cards stay graded) |
 | Library | Add PDFs | ➕ Add PDF |
 | Library | Open a PDF | double-click the row |
 | Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
@@ -140,12 +144,24 @@ Turn any passage you selected into a flashcard:
 
 The answer is copied at that moment — text and image bytes alike — so editing the Extract afterwards never changes the card, and the card still shows its images even if the source document is removed. The dialog's answer preview displays the images inline, not just placeholder boxes. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — and a card whose source PDF was removed keeps that document's name (marked `⚠ removed source`, same as the Extracts tree) instead of hiding the source.
 
+### Review your cards (FSRS)
+
+The green **▶ Review (n)** button shows how many cards are due **today** (brand-new cards are due immediately; graded cards resurface when the scheduler says so). Clicking it starts a session:
+
+1. A **shuffled queue** of those cards, one at a time — question first, with "1 of n" progress.
+2. Press **`Space`** (or **Show answer**) to reveal the answer — read-only, images included.
+3. Grade it: **`1` Again**, **`2` Hard**, **`3` Good**, **`4` Easy** (or click the buttons). The FSRS scheduler computes the next due date, saves it, and the next card appears.
+4. When the queue is done the session closes and the list's **Next due** column shows the new dates. **`Esc`** closes early — anything you already graded stays graded.
+
+Nothing is due? The Review button is disabled — come back tomorrow (or make new cards).
+
 ---
 
 ## Not available yet (honest list)
 
 These are designed and queued — don't look for them in the app today:
 
-- **Flashcard review session** (grading Again/Hard/Good/Easy, FSRS scheduling, due-today filtering) — cards can be created and listed today; reviewing them is queued.
+- **Flashcard list due-today filter** (the All ⇄ Due-today toggle in the card list) — the Review button already counts today's cards; filtering the list itself is queued.
+- **Review session extras** (Again cards re-queued at the end of the same session, end-of-session summary, edit/delete card rows).
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).
