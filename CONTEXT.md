@@ -5,7 +5,7 @@ Domain vocabulary for the PDF reader. This is a glossary, not a spec.
 ## Concepts
 
 ### Document
-A PDF file added to the library. Persisted in `library.db`. Has a path, a name, a page count, and a last-opened page (read progress). A document contains **Extracts**.
+A PDF file added to the library. Persisted in `library.db`. Has a path, a name, a page count, and a last-opened page (read progress). A document contains **Extracts**. Removal is **library-only**: ticking one or more rows and confirming deletes their `pdfs` rows — never the files on disk — and the Extracts/flashcards survive under the original title (#70). A Document whose file is missing stays listed, marked `⚠ file missing`, so it can be removed too (#72).
 
 ### Highlight
 The transient yellow marking drawn over PDF content (text or image) that the user has selected **but not yet extracted**. Exists only inside the reader session. Has no persistence of its own.
