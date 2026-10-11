@@ -1,5 +1,5 @@
 """
-Flashcards View — the card list + FSRS review session (#54/#55/#58/#59).
+Flashcards View — the card list + FSRS review session (#54/#55/#58/#59/#60).
 
 One row per card: question, source document, created, next due — read
 from the headless store (`services.extract_store.list_flashcards`). The
@@ -10,8 +10,11 @@ pinned FSRS scheduler and persist the new due date (#58). Session
 completion (#59): the total is fixed at start, Again cards re-queue
 within it and come back before the end, finishing shows an end-of-
 session summary, and an empty day shows a "No cards due today" hint
-instead of a session. Due-today filtering in the list itself lands
-with #61.
+instead of a session. Row actions (#60): a row's question is corrected
+in place (F2 / ✏️ Edit question — the schedule is untouched) and a card
+is deleted behind a confirmation (Del / 🗑 Delete — its images and
+review logs go with it, the source Extract stays). Due-today filtering
+in the list itself lands with #61.
 """
 import random
 from datetime import datetime, timezone
@@ -28,15 +31,20 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTextEdit,
     QDialog,
+    QLineEdit,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QKeySequence
 
 from services.extract_store import (
+    delete_flashcard,
     display_title,
     get_flashcard_images,
     list_due_cards,
     list_flashcards,
     record_review,
+    update_flashcard_question,
 )
 from services.fsrs_scheduler import (
     RATING_AGAIN,
@@ -289,6 +297,55 @@ class ReviewSessionDialog(QDialog):
         super().keyPressEvent(event)
 
 
+class _EditQuestionDialog(QDialog):
+    """Modal question-correction dialog (#60): the current question
+    prefilled in one line, Save / Cancel; Save dies on an empty field
+    and Enter saves when there is one — the same gate and keyboard flow
+    as the Make-flashcard dialog (#55). The answer and the schedule are
+    not shown or touched here: only the question is ever written."""
+
+    def __init__(self, question, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Question")
+        self.setModal(True)
+        self.resize(420, 140)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        layout.addWidget(QLabel("Question:"))
+        self.question_edit = QLineEdit(question)
+        layout.addWidget(self.question_edit)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        self.save_btn = QPushButton("Save")
+        self.save_btn.setEnabled(bool(question.strip()))
+        self.save_btn.clicked.connect(self.accept)
+        self.question_edit.textChanged.connect(
+            lambda text: self.save_btn.setEnabled(bool(text.strip()))
+        )
+        self.question_edit.returnPressed.connect(self._submit_if_ready)
+        buttons.addWidget(self.save_btn)
+        layout.addLayout(buttons)
+
+    def question(self) -> str:
+        return self.question_edit.text()
+
+    def _submit_if_ready(self):
+        if self.save_btn.isEnabled():
+            self.accept()
+
+    def showEvent(self, event):
+        # Prefilled, so select-all lets a typo fix start typing at once.
+        super().showEvent(event)
+        self.question_edit.selectAll()
+        self.question_edit.setFocus()
+
+
 class FlashcardsView(QWidget):
     def __init__(self):
         super().__init__()
@@ -311,6 +368,27 @@ class FlashcardsView(QWidget):
         header.setStyleSheet("font-size: 28px; font-weight: bold; color: #3498db;")
         header_row.addWidget(header)
         header_row.addStretch()
+        # Row actions (#60): armed only while a row is selected.
+        self.edit_btn = QPushButton("✏️ Edit question")
+        self.edit_btn.setStyleSheet(
+            "QPushButton { background-color: #3498db; color: white;"
+            " border: none; border-radius: 6px; padding: 8px 14px;"
+            " font-size: 14px; }"
+            "QPushButton:hover { background-color: #2980b9; }"
+            "QPushButton:disabled { background-color: #555; color: #999; }"
+        )
+        self.edit_btn.clicked.connect(self._edit_selected)
+        header_row.addWidget(self.edit_btn)
+        self.delete_btn = QPushButton("🗑 Delete")
+        self.delete_btn.setStyleSheet(
+            "QPushButton { background-color: #e74c3c; color: white;"
+            " border: none; border-radius: 6px; padding: 8px 14px;"
+            " font-size: 14px; }"
+            "QPushButton:hover { background-color: #c0392b; }"
+            "QPushButton:disabled { background-color: #555; color: #999; }"
+        )
+        self.delete_btn.clicked.connect(self._delete_selected)
+        header_row.addWidget(self.delete_btn)
         self.review_btn = QPushButton("▶ Review (0)")
         self.review_btn.setStyleSheet(
             "QPushButton { background-color: #27ae60; color: white;"
@@ -379,6 +457,27 @@ class FlashcardsView(QWidget):
         )
         layout.addWidget(self.table)
 
+        # Row actions (#60): the card id rides on the question cell; the
+        # buttons and the context-menu actions share the same handlers.
+        # Shortcuts live on the QActions (F2 edit, Del delete — the
+        # library's Del precedent) with widget scope, so they fire only
+        # while the table has focus and the combos print in the menu.
+        self.table.itemSelectionChanged.connect(self._sync_row_actions)
+        self.edit_action = QAction("✏️ Edit question…", self)
+        self.edit_action.setShortcut(QKeySequence(Qt.Key.Key_F2))
+        self.edit_action.setShortcutContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.edit_action.triggered.connect(self._edit_selected)
+        self.delete_action = QAction("🗑 Delete", self)
+        self.delete_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+        self.delete_action.setShortcutContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.delete_action.triggered.connect(self._delete_selected)
+        self.table.addActions([self.edit_action, self.delete_action])
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+
         self.setLayout(layout)
         self.refresh()
 
@@ -401,8 +500,9 @@ class FlashcardsView(QWidget):
 
     def refresh(self):
         """Reload every card, newest-first (the store's order); update
-        the Review button's due-today count (#58 US26) and the empty-
-        day hint (#59)."""
+        the Review button's due-today count (#58 US26), the empty-day
+        hint (#59) and the row-action buttons (#60, dead without a
+        selection)."""
         conn = self._db_conn()
         cards = list_flashcards(conn) if conn is not None else []
 
@@ -418,6 +518,7 @@ class FlashcardsView(QWidget):
             self.table.hide()
             self.empty_label.show()
             self.due_hint.hide()
+            self._sync_row_actions()
             return
         self.empty_label.hide()
         self.table.show()
@@ -435,4 +536,93 @@ class FlashcardsView(QWidget):
                 _format_due(card.due_utc),
             ]
             for col, value in enumerate(items):
-                self.table.setItem(row, col, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                if col == 0:
+                    # The row actions need the real id, not the text.
+                    item.setData(Qt.ItemDataRole.UserRole, card.id)
+                self.table.setItem(row, col, item)
+        self._sync_row_actions()
+
+    # ------------------------------------------------------------
+    # Row actions (#60): edit question / delete card
+    # ------------------------------------------------------------
+
+    def _selected_row(self):
+        """The selected row index, or None. Driven by the selection
+        model, not the current item — clearSelection() keeps a current
+        row, and a row you can't see must not stay armed (#60)."""
+        rows = self.table.selectionModel().selectedRows()
+        return rows[0].row() if rows else None
+
+    def _selected_card_id(self):
+        """The id of the selected row's card, or None (nothing
+        selected / empty table)."""
+        row = self._selected_row()
+        if row is None:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _sync_row_actions(self):
+        """Arm the edit/delete buttons and context-menu actions only
+        while a row is selected."""
+        enabled = self._selected_card_id() is not None
+        self.edit_btn.setEnabled(enabled)
+        self.delete_btn.setEnabled(enabled)
+        self.edit_action.setEnabled(enabled)
+        self.delete_action.setEnabled(enabled)
+
+    def _confirm_delete(self, question: str) -> bool:
+        """The delete confirmation — its own seam so tests can patch
+        it (the library view's `_confirm_removal` pattern)."""
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "Delete Flashcard",
+            f"Delete this flashcard?\n\n{question}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self,
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.setInformativeText(
+            "Only this card is removed — its images and review history "
+            "go with it. The source Extract stays."
+        )
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _ask_question(self, current: str):
+        """Open the edit dialog on `current`; None = cancelled — also a
+        seam so tests never open a real dialog (#60)."""
+        dialog = _EditQuestionDialog(current, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.question()
+
+    def _delete_selected(self, _checked=False):
+        """Delete the selected card behind a confirmation, then reload
+        the list (#60). Inert with nothing selected — the buttons are
+        disabled, but a direct call must guard too."""
+        conn = self._db_conn()
+        card_id = self._selected_card_id()
+        if conn is None or card_id is None:
+            return
+        row = self._selected_row()
+        question = self.table.item(row, 0).text()
+        if not self._confirm_delete(question):
+            return
+        delete_flashcard(conn, card_id)
+        self.refresh()
+
+    def _edit_selected(self, _checked=False):
+        """Correct the selected card's question; the schedule is never
+        touched (`update_flashcard_question` writes the question alone),
+        then the list reloads (#60)."""
+        conn = self._db_conn()
+        card_id = self._selected_card_id()
+        if conn is None or card_id is None:
+            return
+        row = self._selected_row()
+        question = self._ask_question(self.table.item(row, 0).text())
+        if question is None:
+            return
+        update_flashcard_question(conn, card_id, question)
+        self.refresh()

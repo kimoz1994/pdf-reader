@@ -122,6 +122,8 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
+| Flashcards | Edit a card's question | select the row → **✏️ Edit question** (or `F2`, or right-click → ✏️ Edit question…) |
+| Flashcards | Delete a card | select the row → **🗑 Delete** (or `Del`, or right-click → 🗑 Delete) — asks first |
 | Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled (with "No cards due today") when none |
 | Review session | Reveal the answer | `Space` (or **Show answer**) |
 | Review session | Grade the card | `1` Again · `2` Hard · `3` Good · `4` Easy (or the buttons) |
@@ -145,6 +147,8 @@ Turn any passage you selected into a flashcard:
 
 The answer is copied at that moment — text and image bytes alike — so editing the Extract afterwards never changes the card, and the card still shows its images even if the source document is removed. The dialog's answer preview displays the images inline, not just placeholder boxes. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — and a card whose source PDF was removed keeps that document's name (marked `⚠ removed source`, same as the Extracts tree) instead of hiding the source.
 
+**Fix or remove a card from the list**: select its row and click **✏️ Edit question** (or press `F2`, or right-click the row) to correct a typo — only the question is written, so the card's schedule and next due date do not move; or click **🗑 Delete** (or press `Del`, or right-click) — a confirmation names the card, and confirming removes that card's question, answer, images and review history, **nothing else** (the source Extract stays in your library).
+
 ### Review your cards (FSRS)
 
 The green **▶ Review (n)** button shows how many cards are due **today** (brand-new cards are due immediately; graded cards resurface when the scheduler says so). Clicking it starts a session:
@@ -164,6 +168,5 @@ Nothing is due? The Review button is **disabled (0)** and an orange **"No cards 
 These are designed and queued — don't look for them in the app today:
 
 - **Flashcard list due-today filter** (the All ⇄ Due-today toggle in the card list) — the Review button already counts today's cards; filtering the list itself is queued.
-- **Flashcard row actions** (edit a card's question, delete a card from the list) — queued.
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).

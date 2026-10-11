@@ -12,6 +12,7 @@ from services.extract_store import (
     commit_working_set,
     create_flashcard,
     delete_extract,
+    delete_flashcard,
     display_title,
     displayed_image_count,
     get_flashcard_images,
@@ -25,6 +26,7 @@ from services.extract_store import (
     resolve_doc_id,
     save_extract_text,
     set_capture_display_w,
+    update_flashcard_question,
 )
 
 
@@ -1417,3 +1419,83 @@ def test_record_review_appends_one_log_per_grade(conn):
         "SELECT COUNT(*) FROM review_logs WHERE flashcard_id = ?", (fc_id,)
     ).fetchone()[0]
     assert n == 2
+
+
+def test_delete_flashcard_removes_only_its_own_rows(conn):
+    """(#60 AC) Deleting a card takes its image blobs and review logs
+    with it — and nothing else: the sibling card, its rows, and the
+    source Extract/Captures all survive."""
+    doc_id = seed_pdf(conn)
+    extract_id = commit_working_set(
+        conn,
+        doc_id,
+        [Capture(page=0, rect=(1, 2, 3, 4), kind="text", text_content="keep me")],
+    )
+    doomed = create_flashcard(
+        conn, "Qbye", "A", extract_id=extract_id, doc_id=doc_id,
+        image_blobs=[b"\x89PNG-doomed"],
+    )
+    kept = create_flashcard(conn, "Qkeep", "A", image_blobs=[b"\x89PNG-kept"])
+    due = datetime.now(timezone.utc)
+    record_review(conn, doomed, 3, '{"state": 1}', due)
+    record_review(conn, kept, 3, '{"state": 2}', due)
+
+    assert delete_flashcard(conn, doomed) is True
+
+    assert [c.id for c in list_flashcards(conn)] == [kept]
+    assert get_flashcard_images(conn, kept) == [b"\x89PNG-kept"]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM flashcard_images WHERE flashcard_id = ?", (doomed,)
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM review_logs WHERE flashcard_id = ?", (doomed,)
+    ).fetchone()[0] == 0
+    # The sibling's rows and the source Extract are untouched.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM review_logs WHERE flashcard_id = ?", (kept,)
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM extracts WHERE id = ?", (extract_id,)
+    ).fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0] == 1
+
+
+def test_delete_flashcard_unknown_id_returns_false(conn):
+    """(#60) An id that isn't there removes nothing and reports it."""
+    create_flashcard(conn, "Q", "A")
+    assert delete_flashcard(conn, 9999) is False
+    assert len(list_flashcards(conn)) == 1
+
+
+def test_update_flashcard_question_keeps_scheduling_state(conn):
+    """(#60 AC) Correcting a question writes the question alone: the
+    answer snapshot, fsrs_json and due_utc are bit-identical before and
+    after, and a sibling card is untouched."""
+    graded = create_flashcard(conn, "Old wording?", "A")
+    sibling = create_flashcard(conn, "Other?", "B")
+    new_due = datetime.now(timezone.utc) + timedelta(days=2)
+    record_review(conn, graded, 3, '{"stability": 3.5}', new_due)
+    before = next(c for c in list_flashcards(conn) if c.id == graded)
+    sib_before = next(c for c in list_flashcards(conn) if c.id == sibling)
+
+    assert update_flashcard_question(conn, graded, "Fixed wording?") is True
+
+    after = next(c for c in list_flashcards(conn) if c.id == graded)
+    assert after.question == "Fixed wording?"
+    assert after.fsrs_json == before.fsrs_json == '{"stability": 3.5}'
+    assert after.due_utc == before.due_utc
+    assert after.created_at == before.created_at
+    assert after.answer_text == before.answer_text == "A"
+    sib_after = next(c for c in list_flashcards(conn) if c.id == sibling)
+    assert (sib_after.question, sib_after.fsrs_json, sib_after.due_utc) == (
+        sib_before.question,
+        sib_before.fsrs_json,
+        sib_before.due_utc,
+    )
+
+
+def test_update_flashcard_question_unknown_id_returns_false(conn):
+    """(#60) An id that isn't there changes nothing and reports it."""
+    create_flashcard(conn, "Q", "A")
+    assert update_flashcard_question(conn, 9999, "nope") is False
+    assert [c.question for c in list_flashcards(conn)] == ["Q"]
