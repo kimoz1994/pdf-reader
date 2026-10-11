@@ -461,7 +461,9 @@ class FlashcardsView(QWidget):
         # buttons and the context-menu actions share the same handlers.
         # Shortcuts live on the QActions (F2 edit, Del delete — the
         # library's Del precedent) with widget scope, so they fire only
-        # while the table has focus and the combos print in the menu.
+        # while the table (or a child) has focus and the combos print
+        # beside the labels in the right-click menu — the app has no
+        # menu bar, so that menu is the matching menu (#57's pattern).
         self.table.itemSelectionChanged.connect(self._sync_row_actions)
         self.edit_action = QAction("✏️ Edit question…", self)
         self.edit_action.setShortcut(QKeySequence(Qt.Key.Key_F2))
@@ -572,6 +574,16 @@ class FlashcardsView(QWidget):
         self.edit_action.setEnabled(enabled)
         self.delete_action.setEnabled(enabled)
 
+    def _selection(self):
+        """(conn, card_id, question) for the selected row, or None when
+        there is no connection or no selection (#60)."""
+        conn = self._db_conn()
+        card_id = self._selected_card_id()
+        if conn is None or card_id is None:
+            return None
+        row = self._selected_row()
+        return conn, card_id, self.table.item(row, 0).text()
+
     def _confirm_delete(self, question: str) -> bool:
         """The delete confirmation — its own seam so tests can patch
         it (the library view's `_confirm_removal` pattern)."""
@@ -589,8 +601,8 @@ class FlashcardsView(QWidget):
         )
         return box.exec() == QMessageBox.StandardButton.Yes
 
-    def _ask_question(self, current: str):
-        """Open the edit dialog on `current`; None = cancelled — also a
+    def _prompt_question(self, current: str):
+        """Open the edit dialog on `current`; None = cancelled — a
         seam so tests never open a real dialog (#60)."""
         dialog = _EditQuestionDialog(current, parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -601,12 +613,10 @@ class FlashcardsView(QWidget):
         """Delete the selected card behind a confirmation, then reload
         the list (#60). Inert with nothing selected — the buttons are
         disabled, but a direct call must guard too."""
-        conn = self._db_conn()
-        card_id = self._selected_card_id()
-        if conn is None or card_id is None:
+        selection = self._selection()
+        if selection is None:
             return
-        row = self._selected_row()
-        question = self.table.item(row, 0).text()
+        conn, card_id, question = selection
         if not self._confirm_delete(question):
             return
         delete_flashcard(conn, card_id)
@@ -616,12 +626,11 @@ class FlashcardsView(QWidget):
         """Correct the selected card's question; the schedule is never
         touched (`update_flashcard_question` writes the question alone),
         then the list reloads (#60)."""
-        conn = self._db_conn()
-        card_id = self._selected_card_id()
-        if conn is None or card_id is None:
+        selection = self._selection()
+        if selection is None:
             return
-        row = self._selected_row()
-        question = self._ask_question(self.table.item(row, 0).text())
+        conn, card_id, current = selection
+        question = self._prompt_question(current)
         if question is None:
             return
         update_flashcard_question(conn, card_id, question)

@@ -3,7 +3,7 @@
 Delete asks for confirmation and removes the row; edit corrects the
 question through a small dialog; both refresh the list immediately and
 neither disturbs the card's scheduling state. The confirm and the
-dialog are monkeypatched seams (`_confirm_delete` / `_ask_question`),
+dialog are monkeypatched seams (`_confirm_delete` / `_prompt_question`),
 exactly like the library's `_confirm_removal`.
 """
 import os
@@ -93,21 +93,38 @@ def test_row_actions_arm_only_with_a_selection(app, conn, monkeypatch):
     assert not view.delete_btn.isEnabled()
 
 
-def test_delete_asks_confirm_and_refreshes(app, conn, monkeypatch):
+def test_delete_asks_confirm_and_removes_only_that_card(
+    app, conn, monkeypatch
+):
     """(#60 AC) Delete goes through a confirmation carrying the row's
-    question; on confirm the card is gone and the list reloads."""
-    create_flashcard(conn, "Qkeep", "A")
-    create_flashcard(conn, "Qbye", "B")
+    question; on confirm the card — and its image blobs and review
+    logs — are gone, the sibling card and the list stay."""
+    doomed = create_flashcard(conn, "Qbye", "B", image_blobs=[b"\x89PNG-x"])
+    record_review(
+        conn, doomed, 3, "{}", datetime.now(timezone.utc) + timedelta(days=1)
+    )
+    create_flashcard(conn, "Qkeep", "A", image_blobs=[b"\x89PNG-keep"])
     view = make_view(conn, monkeypatch)
     view.show()
     view.table.selectRow(row_of(view, "Qbye"))
 
     asked = {}
-    monkeypatch.setattr(view, "_confirm_delete", lambda q: asked.setdefault("q", q) or True)
+
+    def fake_confirm(question):
+        asked["q"] = question
+        return True
+
+    monkeypatch.setattr(view, "_confirm_delete", fake_confirm)
     view.delete_btn.click()
 
     assert asked["q"] == "Qbye"  # the dialog names the card it removes
     assert [c.question for c in list_flashcards(conn)] == ["Qkeep"]
+    assert conn.execute(
+        "SELECT COUNT(*) FROM flashcard_images WHERE flashcard_id = ?", (doomed,)
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM review_logs WHERE flashcard_id = ?", (doomed,)
+    ).fetchone()[0] == 0
     assert view.table.rowCount() == 1
     assert view.table.item(0, 0).text() == "Qkeep"
 
@@ -152,7 +169,7 @@ def test_edit_question_updates_row_and_keeps_schedule(app, conn, monkeypatch):
     view.show()
     view.table.selectRow(row_of(view, "Typo here?"))
 
-    monkeypatch.setattr(view, "_ask_question", lambda current: "Fixed?")
+    monkeypatch.setattr(view, "_prompt_question", lambda current: "Fixed?")
     view.edit_btn.click()
 
     assert view.table.rowCount() == 1
@@ -172,7 +189,7 @@ def test_edit_cancelled_changes_nothing(app, conn, monkeypatch):
     view.show()
     view.table.selectRow(0)
 
-    monkeypatch.setattr(view, "_ask_question", lambda current: None)
+    monkeypatch.setattr(view, "_prompt_question", lambda current: None)
     view.edit_btn.click()
 
     assert view.table.item(0, 0).text() == "Qa"
@@ -208,7 +225,7 @@ def test_edit_key_opens_the_question_dialog(app, conn, monkeypatch):
     view.table.setFocus()
     app.processEvents()
 
-    monkeypatch.setattr(view, "_ask_question", lambda current: "Qa!")
+    monkeypatch.setattr(view, "_prompt_question", lambda current: "Qa!")
     QTest.keyClick(view.table, Qt.Key.Key_F2)
 
     assert list_flashcards(conn)[0].question == "Qa!"
