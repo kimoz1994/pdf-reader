@@ -831,3 +831,38 @@ def record_review(
         (flashcard_id, rating),
     )
     conn.commit()
+
+
+def delete_flashcard(conn, flashcard_id: int) -> bool:
+    """Delete one flashcard and only its own rows (#60).
+
+    Takes the card's image blobs (`flashcard_images`) and review
+    history (`review_logs`) with it; the source Extract/Captures and
+    every other card are untouched. Both child tables declare
+    `ON DELETE CASCADE`, but sqlite enforces that only with
+    `PRAGMA foreign_keys=ON` (the app's connections don't set it), so
+    the children are removed explicitly in the same transaction — the
+    same stance `delete_extract` takes with captures. Returns True when
+    a card row was actually removed.
+    """
+    conn.execute(
+        "DELETE FROM flashcard_images WHERE flashcard_id = ?", (flashcard_id,)
+    )
+    conn.execute("DELETE FROM review_logs WHERE flashcard_id = ?", (flashcard_id,))
+    cur = conn.execute("DELETE FROM flashcards WHERE id = ?", (flashcard_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def update_flashcard_question(conn, flashcard_id: int, question: str) -> bool:
+    """Correct a card's question in place (#60): `question` alone is
+    written — the answer snapshot, `fsrs_json` scheduling state,
+    `due_utc` and `created_at` stay bit-identical, so a typo fix never
+    disturbs when the card is next due. Returns True when a row
+    changed."""
+    cur = conn.execute(
+        "UPDATE flashcards SET question = ? WHERE id = ?",
+        (question, flashcard_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
