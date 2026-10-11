@@ -97,7 +97,11 @@ class ReviewSessionDialog(QDialog):
     `record_review`. A card graded **Again** re-queues at the end of
     the queue — within the session total fixed at start, so the "n of
     m" denominator never grows — and is shown again before the session
-    ends (at most once per card, so the session always terminates).
+    ends (at most once per card, so the session always terminates); the
+    progress label marks that re-show with "· again" so a frozen
+    "m of m" doesn't read as done, and each grade writes its new FSRS
+    state back onto the queued card so the re-show is graded from the
+    Again-updated state, not the session-start snapshot.
     Completing the queue shows an end-of-session summary instead of
     closing silently; Escape closes early — graded cards stay graded.
     The scheduler is injected so tests can disable fuzzing (#58 AC).
@@ -197,9 +201,13 @@ class ReviewSessionDialog(QDialog):
         card = self._queue[self._index]
         self._revealed = False
         # The denominator is fixed at start; a re-queued Again card
-        # never pushes the numerator past it (#59).
+        # never pushes the numerator past it (#59). A card coming back
+        # is marked, so "m of m" doesn't read as "already done".
         shown = min(self._index + 1, self._total)
-        self.progress_label.setText(f"{shown} of {self._total}")
+        text = f"{shown} of {self._total}"
+        if card.id in self._graded_ids:
+            text += " · again"
+        self.progress_label.setText(text)
         self.question_label.setText(card.question or "(no question)")
         self.answer_view.clear()
         self.answer_view.hide()
@@ -249,6 +257,13 @@ class ReviewSessionDialog(QDialog):
             card.fsrs_json, rating, scheduler=self._scheduler
         )
         record_review(self._conn, card.id, rating, fsrs_json, due)
+        # Write the new state back onto the queue entry: the same
+        # object is what gets re-queued, so a card shown again is
+        # graded from its Again-updated state, not the session-start
+        # snapshot (otherwise the first grade's stability update would
+        # be silently discarded).
+        card.fsrs_json = fsrs_json
+        card.due_utc = due
         self._tally[rating] = self._tally.get(rating, 0) + 1
         self._graded_ids.add(card.id)
         if rating == RATING_AGAIN and card.id not in self._requeued:

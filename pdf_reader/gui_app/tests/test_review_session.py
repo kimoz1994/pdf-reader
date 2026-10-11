@@ -7,6 +7,7 @@ completion (#59): Again cards re-queue within the fixed session total
 and come back before the end, finishing shows an end-of-session
 summary, and an empty day shows a hint instead of a session.
 """
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -26,7 +27,11 @@ from services.extract_store import (
     list_due_cards,
     list_flashcards,
 )
-from services.fsrs_scheduler import end_of_local_day_utc, make_scheduler
+from services.fsrs_scheduler import (
+    end_of_local_day_utc,
+    make_scheduler,
+    rate_card,
+)
 from views.flashcards_view import FlashcardsView, ReviewSessionDialog
 
 
@@ -70,9 +75,8 @@ def test_session_loop_reveal_grade_persist(app, conn):
     queue = _due_today(conn)
     assert {c.id for c in queue} == {q1, q2}
 
-    dialog = ReviewSessionDialog(
-        queue, conn, scheduler=make_scheduler(fuzz=False), shuffle=False
-    )
+    sched = make_scheduler(fuzz=False)
+    dialog = ReviewSessionDialog(queue, conn, scheduler=sched, shuffle=False)
     dialog.show()
     assert dialog.isVisible()
 
@@ -116,6 +120,14 @@ def test_session_loop_reveal_grade_persist(app, conn):
         "SELECT flashcard_id, rating FROM review_logs ORDER BY id"
     ).fetchall()
     assert logs == [(q1, 1), (q2, 3), (q1, 3)]
+    # Q1's final state must chain Again -> Good: the re-show grades
+    # from the Again-updated state, not the session-start snapshot
+    # (compare the scheduler fields; card_id/ timestamps differ).
+    after_again, _ = rate_card(None, 1, scheduler=sched)
+    expected, _ = rate_card(after_again, 3, scheduler=sched)
+    fields = ("state", "step", "stability", "difficulty")
+    got = {k: json.loads(cards[q1].fsrs_json)[k] for k in fields}
+    assert got == {k: json.loads(expected)[k] for k in fields}
 
 
 def test_again_requeues_within_fixed_total(app, conn):
@@ -139,11 +151,12 @@ def test_again_requeues_within_fixed_total(app, conn):
     assert dialog.question_label.text() == "QB"
     assert dialog.progress_label.text() == "2 of 2"
 
-    # Good on card 2 -> the Again card returns; still "of 2".
+    # Good on card 2 -> the Again card returns; still "of 2", marked
+    # as a re-show so the frozen numerator doesn't read as "done".
     QTest.keyClick(dialog, Qt.Key.Key_Space)
     QTest.keyClick(dialog, Qt.Key.Key_3)
     assert dialog.question_label.text() == "QA"  # shown again before the end
-    assert dialog.progress_label.text() == "2 of 2"  # never "3 of 2"
+    assert dialog.progress_label.text() == "2 of 2 · again"  # never "3 of 2"
     assert len(dialog._queue) == 3  # re-queued within the fixed total
 
     # Finishing shows the summary with both cards reviewed.

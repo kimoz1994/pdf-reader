@@ -152,7 +152,7 @@ The green **▶ Review (n)** button shows how many cards are due **today** (bran
 1. A **shuffled queue** of those cards, one at a time — question first, with **"n of m"** progress (`m` = the number of cards due today, fixed for the whole session).
 2. Press **`Space`** (or **Show answer**) to reveal the answer — read-only, images included.
 3. Grade it: **`1` Again**, **`2` Hard**, **`3` Good**, **`4` Easy** (or click the buttons). The FSRS scheduler computes the next due date, saves it, and the next card appears.
-4. **Again cards come back in the same session**: they are re-queued at the end (once each), so the queue's total stays fixed — "2 of 5" never becomes "6 of 5" — and the card is shown again before the session ends. It is still due for the rest of today afterwards.
+4. **Again cards come back in the same session**: they are re-queued at the end (once each), so the queue's total stays fixed — "2 of 5" never becomes "6 of 5" — and the card is shown again before the session ends (the counter keeps reading `2 of 5` but is marked `· again`, so you can tell a repeat from a first showing). It is still due for the rest of today afterwards, and grading it again builds on the first grade rather than starting over.
 5. When the last card is graded you get an **end-of-session summary** ("Session complete — 5 cards reviewed (2 Again)") with a **Close** button back to the list; the **Next due** column already shows the new dates. **`Esc`** closes early — anything you already graded stays graded.
 
 Nothing is due? The Review button is **disabled (0)** and an orange **"No cards due today"** hint sits under it — no empty session opens. Come back tomorrow (or make new cards).
