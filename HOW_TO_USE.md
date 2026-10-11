@@ -125,6 +125,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Flashcards | Edit a card's question | select the row → **✏️ Edit question** (or `F2`, or right-click → ✏️ Edit question…) |
 | Flashcards | Delete a card | select the row → **🗑 Delete** (or `Del`, or right-click → 🗑 Delete) — asks first |
 | Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled (with "No cards due today") when none |
+| Flashcards | Show only today's due cards | **📅 Due today** (orange while on — exactly the Review session's set); click again for All |
 | Review session | Reveal the answer | `Space` (or **Show answer**) |
 | Review session | Grade the card | `1` Again · `2` Hard · `3` Good · `4` Easy (or the buttons) |
 | Review session | Close early | `Esc` (graded cards stay graded) |
@@ -149,6 +150,8 @@ The answer is copied at that moment — text and image bytes alike — so editin
 
 **Fix or remove a card from the list**: select its row and click **✏️ Edit question** (or press `F2`, or right-click the row) to correct a typo — only the question is written, so the card's schedule and next due date do not move; or click **🗑 Delete** (or press `Del`, or right-click) — a confirmation names the card, and confirming removes that card's question, answer, images and review history, **nothing else** (the source Extract stays in your library).
 
+**Only see what's due today**: click **📅 Due today** in the header — the list then shows exactly the cards a Review session would grade (same rule: overdue, due later today, and brand-new cards; tomorrow's cards stay hidden, sorted soonest-first). Click it again to return to **All**. With nothing due, the table hides and the orange "No cards due today" hint explains why.
+
 ### Review your cards (FSRS)
 
 The green **▶ Review (n)** button shows how many cards are due **today** (brand-new cards are due immediately; graded cards resurface when the scheduler says so). Clicking it starts a session:
@@ -167,6 +170,6 @@ Nothing is due? The Review button is **disabled (0)** and an orange **"No cards 
 
 These are designed and queued — don't look for them in the app today:
 
-- **Flashcard list due-today filter** (the All ⇄ Due-today toggle in the card list) — the Review button already counts today's cards; filtering the list itself is queued.
+- **Jump from a card to its source Extract** (queued as #62) — the list shows the source document name (and `⚠ removed source` for orphans), but clicking through to the Extract or the reader page isn't wired up yet.
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).
