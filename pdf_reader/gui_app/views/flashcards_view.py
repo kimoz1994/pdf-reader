@@ -1,13 +1,17 @@
 """
-Flashcards View — the card list + FSRS review session (#54/#55/#58).
+Flashcards View — the card list + FSRS review session (#54/#55/#58/#59).
 
 One row per card: question, source document, created, next due — read
 from the headless store (`services.extract_store.list_flashcards`). The
 Review (n) button starts a session over today's set (new + due at any
 point during the local day): a shuffled queue, question first, Space
 (or click) reveals the read-only answer, keys 1-4 grade it through the
-pinned FSRS scheduler and persist the new due date (#58). Due-today
-filtering in the list itself lands with #61.
+pinned FSRS scheduler and persist the new due date (#58). Session
+completion (#59): the total is fixed at start, Again cards re-queue
+within it and come back before the end, finishing shows an end-of-
+session summary, and an empty day shows a "No cards due today" hint
+instead of a session. Due-today filtering in the list itself lands
+with #61.
 """
 import random
 from datetime import datetime, timezone
@@ -84,13 +88,22 @@ def _source_label(card):
 
 
 class ReviewSessionDialog(QDialog):
-    """The FSRS review session (#58): question → reveal → grade.
+    """The FSRS review session (#58/#59): question → reveal → grade.
 
     A shuffled queue fixed at session start (the caller passes today's
     due set); Space or a click reveals the read-only answer (text +
     card-owned images via the shared renderer); keys 1-4 (or the grade
     buttons) advance the card through the scheduler and persist via
-    `record_review`. Escape closes early — graded cards stay graded.
+    `record_review`. A card graded **Again** re-queues at the end of
+    the queue — within the session total fixed at start, so the "n of
+    m" denominator never grows — and is shown again before the session
+    ends (at most once per card, so the session always terminates); the
+    progress label marks that re-show with "· again" so a frozen
+    "m of m" doesn't read as done, and each grade writes its new FSRS
+    state back onto the queued card so the re-show is graded from the
+    Again-updated state, not the session-start snapshot.
+    Completing the queue shows an end-of-session summary instead of
+    closing silently; Escape closes early — graded cards stay graded.
     The scheduler is injected so tests can disable fuzzing (#58 AC).
     """
 
@@ -103,8 +116,13 @@ class ReviewSessionDialog(QDialog):
         self._queue = list(queue)
         if shuffle:
             random.shuffle(self._queue)
+        self._total = len(self._queue)  # fixed "m" for the whole session (#59)
         self._index = 0
         self._revealed = False
+        self._done = False
+        self._tally = {}  # rating -> grade events this session
+        self._graded_ids = set()  # distinct cards graded
+        self._requeued = set()  # card ids already re-queued once (#59)
         self._scheduler = scheduler if scheduler is not None else make_scheduler()
 
         layout = QVBoxLayout(self)
@@ -154,6 +172,22 @@ class ReviewSessionDialog(QDialog):
             self._grade_buttons.append((key, btn, rating))
         layout.addLayout(grades)
 
+        # End-of-session summary (#59): hidden until the queue drains.
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.summary_label.setStyleSheet(
+            "color: #ecf0f1; font-size: 20px; font-weight: bold;"
+            " padding: 30px;"
+        )
+        self.summary_label.hide()
+        layout.addWidget(self.summary_label, 1)
+
+        self.close_btn = QPushButton("Close")
+        self.close_btn.clicked.connect(self.accept)
+        self.close_btn.hide()
+        layout.addWidget(self.close_btn)
+
         self._show_current()
 
     # ------------------------------------------------------------
@@ -162,13 +196,18 @@ class ReviewSessionDialog(QDialog):
 
     def _show_current(self):
         if self._index >= len(self._queue):
-            self.accept()
+            self._show_summary()
             return
         card = self._queue[self._index]
         self._revealed = False
-        self.progress_label.setText(
-            f"{self._index + 1} of {len(self._queue)}"
-        )
+        # The denominator is fixed at start; a re-queued Again card
+        # never pushes the numerator past it (#59). A card coming back
+        # is marked, so "m of m" doesn't read as "already done".
+        shown = min(self._index + 1, self._total)
+        text = f"{shown} of {self._total}"
+        if card.id in self._graded_ids:
+            text += " · again"
+        self.progress_label.setText(text)
         self.question_label.setText(card.question or "(no question)")
         self.answer_view.clear()
         self.answer_view.hide()
@@ -177,8 +216,29 @@ class ReviewSessionDialog(QDialog):
         for _, btn, _ in self._grade_buttons:
             btn.setEnabled(False)
 
+    def _show_summary(self):
+        """End of the queue: hide the study surface and show how the
+        session went; the user closes back to the list (#59 AC)."""
+        self._done = True
+        self._revealed = False
+        self.question_label.hide()
+        self.answer_view.hide()
+        self.reveal_btn.hide()
+        for _, btn, _ in self._grade_buttons:
+            btn.setEnabled(False)
+            btn.hide()
+        self.progress_label.setText(f"{self._total} of {self._total}")
+        summary = f"Session complete — {len(self._graded_ids)} cards reviewed"
+        again = self._tally.get(RATING_AGAIN, 0)
+        if again:
+            summary += f" ({again} Again)"
+        self.summary_label.setText(summary)
+        self.summary_label.show()
+        self.close_btn.show()
+        self.close_btn.setFocus()
+
     def _reveal(self):
-        if self._revealed or self._index >= len(self._queue):
+        if self._done or self._revealed or self._index >= len(self._queue):
             return
         card = self._queue[self._index]
         blobs = get_flashcard_images(self._conn, card.id)
@@ -190,13 +250,27 @@ class ReviewSessionDialog(QDialog):
             btn.setEnabled(True)
 
     def _grade(self, rating: int):
-        if not self._revealed or self._index >= len(self._queue):
+        if self._done or not self._revealed or self._index >= len(self._queue):
             return
         card = self._queue[self._index]
         fsrs_json, due = rate_card(
             card.fsrs_json, rating, scheduler=self._scheduler
         )
         record_review(self._conn, card.id, rating, fsrs_json, due)
+        # Write the new state back onto the queue entry: the same
+        # object is what gets re-queued, so a card shown again is
+        # graded from its Again-updated state, not the session-start
+        # snapshot (otherwise the first grade's stability update would
+        # be silently discarded).
+        card.fsrs_json = fsrs_json
+        card.due_utc = due
+        self._tally[rating] = self._tally.get(rating, 0) + 1
+        self._graded_ids.add(card.id)
+        if rating == RATING_AGAIN and card.id not in self._requeued:
+            # Re-queue within the fixed total: it comes back before the
+            # session ends, at most once per card so the queue drains.
+            self._requeued.add(card.id)
+            self._queue.append(card)
         self._index += 1
         self._show_current()
 
@@ -248,6 +322,14 @@ class FlashcardsView(QWidget):
         self.review_btn.clicked.connect(self._start_review)
         header_row.addWidget(self.review_btn)
         layout.addLayout(header_row)
+
+        # Visible "nothing to study" state (#59 AC) — a disabled
+        # button's tooltip alone is too easy to miss.
+        self.due_hint = QLabel()
+        self.due_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.due_hint.setStyleSheet("color: #e67e22; font-size: 15px;")
+        self.due_hint.hide()
+        layout.addWidget(self.due_hint)
 
         self.empty_label = QLabel(
             "No flashcards yet.\n\n"
@@ -309,6 +391,8 @@ class FlashcardsView(QWidget):
         conn = self._db_conn()
         queue = self._due_cards(conn)
         if conn is None or not queue:
+            # Nothing due: the hint already says so; never open an
+            # empty session (#59 AC).
             return
         dialog = ReviewSessionDialog(queue, conn, parent=self)
         dialog.exec()
@@ -317,7 +401,8 @@ class FlashcardsView(QWidget):
 
     def refresh(self):
         """Reload every card, newest-first (the store's order); update
-        the Review button's due-today count (#58 US26)."""
+        the Review button's due-today count (#58 US26) and the empty-
+        day hint (#59)."""
         conn = self._db_conn()
         cards = list_flashcards(conn) if conn is not None else []
 
@@ -332,9 +417,15 @@ class FlashcardsView(QWidget):
             self.table.setRowCount(0)
             self.table.hide()
             self.empty_label.show()
+            self.due_hint.hide()
             return
         self.empty_label.hide()
         self.table.show()
+        if due:
+            self.due_hint.hide()
+        else:
+            self.due_hint.setText("No cards due today")
+            self.due_hint.show()
         self.table.setRowCount(len(cards))
         for row, card in enumerate(cards):
             items = [

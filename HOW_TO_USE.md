@@ -122,10 +122,11 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
-| Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled when none |
+| Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled (with "No cards due today") when none |
 | Review session | Reveal the answer | `Space` (or **Show answer**) |
 | Review session | Grade the card | `1` Again · `2` Hard · `3` Good · `4` Easy (or the buttons) |
 | Review session | Close early | `Esc` (graded cards stay graded) |
+| Review session | Finish the session | summary → **Close** (Again cards return first, total stays fixed) |
 | Library | Add PDFs | ➕ Add PDF |
 | Library | Open a PDF | double-click the row |
 | Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
@@ -148,12 +149,13 @@ The answer is copied at that moment — text and image bytes alike — so editin
 
 The green **▶ Review (n)** button shows how many cards are due **today** (brand-new cards are due immediately; graded cards resurface when the scheduler says so). Clicking it starts a session:
 
-1. A **shuffled queue** of those cards, one at a time — question first, with "1 of n" progress.
+1. A **shuffled queue** of those cards, one at a time — question first, with **"n of m"** progress (`m` = the number of cards due today, fixed for the whole session).
 2. Press **`Space`** (or **Show answer**) to reveal the answer — read-only, images included.
 3. Grade it: **`1` Again**, **`2` Hard**, **`3` Good**, **`4` Easy** (or click the buttons). The FSRS scheduler computes the next due date, saves it, and the next card appears.
-4. When the queue is done the session closes and the list's **Next due** column shows the new dates. **`Esc`** closes early — anything you already graded stays graded.
+4. **Again cards come back in the same session**: they are re-queued at the end (once each), so the queue's total stays fixed — "2 of 5" never becomes "6 of 5" — and the card is shown again before the session ends (the counter keeps reading `2 of 5` but is marked `· again`, so you can tell a repeat from a first showing). It is still due for the rest of today afterwards, and grading it again builds on the first grade rather than starting over.
+5. When the last card is graded you get an **end-of-session summary** ("Session complete — 5 cards reviewed (2 Again)") with a **Close** button back to the list; the **Next due** column already shows the new dates. **`Esc`** closes early — anything you already graded stays graded.
 
-Nothing is due? The Review button is disabled — come back tomorrow (or make new cards).
+Nothing is due? The Review button is **disabled (0)** and an orange **"No cards due today"** hint sits under it — no empty session opens. Come back tomorrow (or make new cards).
 
 ---
 
@@ -162,6 +164,6 @@ Nothing is due? The Review button is disabled — come back tomorrow (or make ne
 These are designed and queued — don't look for them in the app today:
 
 - **Flashcard list due-today filter** (the All ⇄ Due-today toggle in the card list) — the Review button already counts today's cards; filtering the list itself is queued.
-- **Review session extras** (Again cards re-queued at the end of the same session, end-of-session summary, edit/delete card rows).
+- **Flashcard row actions** (edit a card's question, delete a card from the list) — queued.
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).
