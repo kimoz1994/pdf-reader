@@ -8,6 +8,7 @@ from services.extract_store import (
     IMG_PLACEHOLDER,
     Capture,
     Extract,
+    backup_database,
     capture_overlaps_extract,
     commit_working_set,
     create_flashcard,
@@ -1499,3 +1500,55 @@ def test_update_flashcard_question_unknown_id_returns_false(conn):
     create_flashcard(conn, "Q", "A")
     assert update_flashcard_question(conn, 9999, "nope") is False
     assert [c.question for c in list_flashcards(conn)] == ["Q"]
+
+
+# ------------------------------------------------------------
+# library.db backup (#83)
+# ------------------------------------------------------------
+
+
+def test_backup_database_writes_openable_snapshot(conn, tmp_path):
+    """(#83 AC) The backup is a consistent, openable copy: a fresh
+    connection to the returned path sees the same rows, even while the
+    source connection stays open."""
+    seed_pdf(conn)
+    create_flashcard(conn, "Q", "A")
+    backups = tmp_path / "backups"
+
+    written = backup_database(conn, backups)
+
+    assert written.parent == backups
+    assert written.name.startswith("library-") and written.name.endswith(".db")
+    copy = sqlite3.connect(written)
+    try:
+        assert copy.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 1
+        assert [r[0] for r in copy.execute("SELECT question FROM flashcards")] == ["Q"]
+    finally:
+        copy.close()
+
+
+def test_backup_database_creates_the_backups_dir(conn, tmp_path):
+    """(#83) A missing backups folder is created, not an error."""
+    backups = tmp_path / "fresh" / "backups"
+    written = backup_database(conn, backups)
+    assert written.exists()
+
+
+def test_backup_database_prunes_to_keep(conn, tmp_path):
+    """(#83 AC) Old backups are pruned to the newest `keep`; the just-
+    written snapshot always survives."""
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    # Deterministic older files (timestamped names sort lexicographically).
+    for day in ("01", "02", "03"):
+        (backups / f"library-202001{day}-000000.db").write_bytes(b"old")
+
+    written = backup_database(conn, backups, keep=2)
+
+    remaining = sorted(p.name for p in backups.iterdir())
+    assert len(remaining) == 2
+    assert written.name in remaining
+    # The two newest by mtime: the just-written one plus the newest old
+    # file — the oldest was pruned.
+    assert "library-20200103-000000.db" in remaining
+    assert "library-20200101-000000.db" not in remaining

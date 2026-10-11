@@ -1,11 +1,13 @@
 """Library removal UX (#72): per-row checkboxes drive a count-enabled
 Remove button, with select-all and the Del key; rows whose file is gone
-stay listed so they can be removed too. Offscreen widget tests over a
-temp database."""
+stay listed so they can be removed too. Plus the 💾 Backup button (#83):
+one click snapshots library.db into backups/. Offscreen widget tests
+over a temp database."""
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -165,3 +167,45 @@ def test_del_key_removes_checked_rows(view, tmp_path, monkeypatch, app):
 
     assert view.pdf_list.count() == 1
     assert view.cursor.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 1
+
+
+# ------------------------------------------------------------
+# library.db backup (#83)
+# ------------------------------------------------------------
+
+
+def test_backup_button_calls_seam_and_confirms(view, monkeypatch):
+    """(#83 AC) The 💾 Backup button runs the backup seam and shows the
+    user where the copy went."""
+    fake_path = Path("/backups/library-20261011-120000.db")
+    monkeypatch.setattr(view, "_do_backup", lambda: fake_path)
+    messages = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: messages.append(a),
+    )
+
+    view.backup_btn.click()
+
+    assert messages, "no confirmation shown"
+    assert str(fake_path) in messages[0][2]
+
+
+def test_backup_button_writes_a_real_openable_snapshot(view, tmp_path, monkeypatch):
+    """(#83) A real click leaves an openable library-*.db copy in the
+    backups dir with the same rows as the source."""
+    seed(view, tmp_path / "a.pdf")
+    seed(view, tmp_path / "b.pdf")
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information", lambda *a: None
+    )
+
+    view.backup_btn.click()
+
+    backups = list(view.backups_dir.glob("library-*.db"))
+    assert len(backups) == 1
+    copy = sqlite3.connect(backups[0])
+    try:
+        assert copy.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 2
+    finally:
+        copy.close()

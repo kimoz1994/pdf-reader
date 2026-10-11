@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 import os
+import sqlite3
 
 # Marks where an inline image sits inside the text blob. One per image
 # Capture, in capture order; count is normalized on every save.
@@ -866,3 +867,40 @@ def update_flashcard_question(conn, flashcard_id: int, question: str) -> bool:
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+def backup_database(conn, dest_dir, keep: int = 10) -> Path:
+    """Write a consistent snapshot of `conn`'s database into `dest_dir`
+    as `library-YYYYMMDD-HHMMSS.db` and prune to the newest `keep`
+    backups; returns the written path (#83).
+
+    Uses sqlite3's `backup()` API — a safe point-in-time copy even while
+    the source connection is open and the app is running. A raw file
+    copy of a live SQLite database can tear; this cannot. Only files
+    matching the `library-*.db` pattern are pruned, so an unrelated file
+    dropped into the backups folder is never deleted.
+    """
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    written = dest_dir / f"library-{stamp}.db"
+    # Guard against a same-second second call clobbering the first.
+    n = 1
+    while written.exists():
+        written = dest_dir / f"library-{stamp}-{n}.db"
+        n += 1
+    dest = sqlite3.connect(written)
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
+    # Prune oldest first — by mtime, the true order even within one
+    # second (the `-1` collision suffix sorts before the plain name).
+    # `keep` counts the just-written file, so keep - 1 older ones stay.
+    old = sorted(
+        (p for p in dest_dir.glob("library-*.db") if p != written),
+        key=lambda p: p.stat().st_mtime,
+    )
+    for stale in old[: max(0, len(old) - (keep - 1))]:
+        stale.unlink()
+    return written

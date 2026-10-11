@@ -12,6 +12,8 @@ from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 import sqlite3
 from pathlib import Path
 
+from services.extract_store import backup_database
+
 # Removal toolbar (#72): label base for the button; `_sync_removal_ui`
 # appends the ticked count when there is one.
 _REMOVE_LABEL = "🗑️ Remove Selected"
@@ -139,6 +141,9 @@ class LibraryView(QWidget):
         self.db_path = Path(db_path) if db_path else (
             Path(__file__).parent.parent / "library.db"
         )
+        # Backups live next to the DB (#83); *.db is gitignored so the
+        # copies never reach the repo.
+        self.backups_dir = self.db_path.parent / "backups"
         self.init_database()
         
         self.selected_pdfs = set()  # ticked rows, by path (#72)
@@ -238,7 +243,27 @@ class LibraryView(QWidget):
         """)
         self.remove_btn.clicked.connect(self.remove_selected_pdfs)
         buttons_layout.addWidget(self.remove_btn)
-        
+
+        # One-click DB backup (#83): safe snapshot of library.db — the
+        # user's whole study history — into backups/ next to it.
+        self.backup_btn = QPushButton("💾 Backup")
+        self.backup_btn.setFixedHeight(45)
+        self.backup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2ecc71;
+            }
+        """)
+        self.backup_btn.clicked.connect(self._backup_library)
+        buttons_layout.addWidget(self.backup_btn)
+
         layout.addLayout(buttons_layout)
         
         # PDF List with responsive scroll
@@ -483,7 +508,25 @@ class LibraryView(QWidget):
         )
         box.setDetailedText("\n".join(names))
         return box.exec() == QMessageBox.StandardButton.Yes
-    
+
+    def _do_backup(self):
+        """Run the backup seam and return the written path (#83). A
+        separate method so tests can monkeypatch it (the
+        `_confirm_removal` pattern)."""
+        return backup_database(self.conn, self.backups_dir)
+
+    def _backup_library(self):
+        """💾 Backup: snapshot library.db into backups/ and tell the
+        user where it went (#83)."""
+        path = self._do_backup()
+        QMessageBox.information(
+            self,
+            "Backup saved",
+            f"A copy of your library was saved to:\n\n{path}\n\n"
+            "Keep it somewhere safe — it holds your extracts, flashcards "
+            "and study schedule.",
+        )
+
     def update_progress(self, pdf_path: str, current_page: int):
         """Update progress for a PDF"""
         try:

@@ -64,7 +64,7 @@ Dismissing all pending Highlights (`Esc`) without committing anything. The Worki
 - Reader keymap: `e` commit Working Set, `Esc` clear Working Set, `d` delete (twice), plus existing navigation/search keys.
 
 ## Storage
-- Extracts live in `library.db` alongside `pdfs`, keyed by `doc_id`.
+- Extracts live in `library.db` alongside `pdfs`, keyed by `doc_id`. Because `library.db` holds the user's whole study history (extracts, flashcards, schedules) and is gitignored, the Library's **💾 Backup** button (#83) snapshots it via sqlite3's `backup()` API into a `backups/` folder next to the DB — timestamped, pruned to the newest 10 — so a corrupted or lost DB is recoverable.
 - `extracts` rows: `id`, `doc_id`, `created_at` (ordering), `type` ('text'|'image'|'combined', denormalized for cheap list UI), `text_content` (the whole-Extract text blob; inline images marked U+FFFC, one per image Capture in capture order).
 - `captures` rows: `id`, `extract_id`, `page`, `rect` ('x0,y0,x1,y1' PDF-space), `kind`, `text_content` (always NULL — captures are anchors, never text), `image_blob` (kind='image', stored as PNG so extracts are PDF-independent).
 - Pre-blob databases migrate once on `init_schema`: per-capture text is folded into the blob (capture-id order, images as placeholders) and capture text is NULLed. Idempotent via a column-existence check.
