@@ -137,7 +137,7 @@ pdf_reader/
 
 ## CI/CD
 
-None. The project is developed locally with git-only workflow (feature branches + PRs). Adding CI (lint + smoke test) is planned.
+None. The project is developed locally with git-only workflow (feature branches + PRs). CI runs the full pytest suite on every push to master and every pull request via GitHub Actions (`QT_QPA_PLATFORM=offscreen` on ubuntu-latest, #81). Adding lint on top is still planned.
 
 ## Limitations
 
@@ -149,7 +149,8 @@ None. The project is developed locally with git-only workflow (feature branches 
 ## Future work
 
 1. Flashcards: creation, listing, and the FSRS review session shipped (#55/#56/#57/#58), including session completion behaviors — Again re-queue within a fixed total, "n of m" progress, end-of-session summary, "No cards due today" hint (#59) — list row actions — edit question / delete card with confirmation (#60) — and the All ⇄ Due-today list toggle that shows exactly the Review session's set (#61). Remaining: source jump (#62), docs pass (#63).
-2. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
+2. Standalone packaging (e.g. PyInstaller), lint on top of the existing CI.
+3. Data safety: one-click backup of `library.db` shipped (#83) — the `💾 Backup` button snapshots the DB (extracts, flashcards, schedules) into `backups/`, pruning to the newest 10 copies.
 
 ## Self-evaluation
 
