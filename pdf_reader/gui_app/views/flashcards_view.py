@@ -1,5 +1,5 @@
 """
-Flashcards View — the card list + FSRS review session (#54/#55/#58/#59/#60).
+Flashcards View — the card list + FSRS review session (#54/#55/#58/#59/#60/#61).
 
 One row per card: question, source document, created, next due — read
 from the headless store (`services.extract_store.list_flashcards`). The
@@ -13,8 +13,12 @@ session summary, and an empty day shows a "No cards due today" hint
 instead of a session. Row actions (#60): a row's question is corrected
 in place (F2 / ✏️ Edit question — the schedule is untouched) and a card
 is deleted behind a confirmation (Del / 🗑 Delete — its images and
-review logs go with it, the source Extract stays). Due-today filtering
-in the list itself lands with #61.
+review logs go with it, the source Extract stays). Due-today filter
+(#61): the 📅 Due today toggle switches the table between every card and
+exactly the Review session's set (the same
+`list_due_cards(conn, end_of_local_day_utc())` cutoff — overdue,
+later-today and new cards in, tomorrow out), so the rows you see are
+always the rows a session would grade.
 """
 import random
 from datetime import datetime, timezone
@@ -368,6 +372,24 @@ class FlashcardsView(QWidget):
         header.setStyleSheet("font-size: 28px; font-weight: bold; color: #3498db;")
         header_row.addWidget(header)
         header_row.addStretch()
+        # Due-today filter (#61): unchecked = All, checked = exactly
+        # the Review session's set. The button's check state is the
+        # single source of truth — refresh() reads it, no shadow flag.
+        self.due_toggle = QPushButton("📅 Due today")
+        self.due_toggle.setCheckable(True)
+        self.due_toggle.setStyleSheet(
+            "QPushButton { background-color: #34495e; color: #ecf0f1;"
+            " border: none; border-radius: 6px; padding: 8px 14px;"
+            " font-size: 14px; }"
+            "QPushButton:hover { background-color: #3d566e; }"
+            "QPushButton:checked { background-color: #e67e22;"
+            " font-weight: bold; }"
+        )
+        self.due_toggle.setToolTip(
+            "Show only the cards a Review session would grade today"
+        )
+        self.due_toggle.toggled.connect(self._toggle_due_today)
+        header_row.addWidget(self.due_toggle)
         # Row actions (#60): armed only while a row is selected.
         self.edit_btn = QPushButton("✏️ Edit question")
         self.edit_btn.setStyleSheet(
@@ -488,6 +510,12 @@ class FlashcardsView(QWidget):
             return []
         return list_due_cards(conn, end_of_local_day_utc())
 
+    def _toggle_due_today(self, _checked):
+        """(#61) The filter button flipped — reload the list. The
+        Review button count and the empty-day hint are filter-
+        independent and get recomputed by refresh() anyway."""
+        self.refresh()
+
     def _start_review(self):
         conn = self._db_conn()
         queue = self._due_cards(conn)
@@ -501,10 +529,11 @@ class FlashcardsView(QWidget):
         self.refresh()
 
     def refresh(self):
-        """Reload every card, newest-first (the store's order); update
-        the Review button's due-today count (#58 US26), the empty-day
-        hint (#59) and the row-action buttons (#60, dead without a
-        selection)."""
+        """Reload the card list — every card, or just the Review
+        session's set when the 📅 Due today filter is on (#61) — and
+        update the Review button's due-today count (#58 US26), the
+        empty-day hint (#59) and the row-action buttons (#60, dead
+        without a selection)."""
         conn = self._db_conn()
         cards = list_flashcards(conn) if conn is not None else []
 
@@ -516,21 +545,28 @@ class FlashcardsView(QWidget):
         )
 
         if not cards:
-            self.table.setRowCount(0)
-            self.table.hide()
+            self._hide_table()
             self.empty_label.show()
             self.due_hint.hide()
-            self._sync_row_actions()
             return
         self.empty_label.hide()
-        self.table.show()
         if due:
             self.due_hint.hide()
         else:
             self.due_hint.setText("No cards due today")
             self.due_hint.show()
-        self.table.setRowCount(len(cards))
-        for row, card in enumerate(cards):
+
+        # #61: the filter shows exactly the session's set — the same
+        # `_due_cards` list the Review button counts — so a zero-due
+        # day hides the table (the hint already says why) instead of
+        # showing a blank box.
+        visible = due if self.due_toggle.isChecked() else cards
+        if not visible:
+            self._hide_table()
+            return
+        self.table.show()
+        self.table.setRowCount(len(visible))
+        for row, card in enumerate(visible):
             items = [
                 card.question or "(no question)",
                 _source_label(card),
@@ -543,6 +579,14 @@ class FlashcardsView(QWidget):
                     # The row actions need the real id, not the text.
                     item.setData(Qt.ItemDataRole.UserRole, card.id)
                 self.table.setItem(row, col, item)
+        self._sync_row_actions()
+
+    def _hide_table(self):
+        """Empty, hidden table with row actions disarmed — the shared
+        teardown of refresh()'s two empty states (no cards at all, or
+        the Due-today filter on with none due, #61)."""
+        self.table.setRowCount(0)
+        self.table.hide()
         self._sync_row_actions()
 
     # ------------------------------------------------------------

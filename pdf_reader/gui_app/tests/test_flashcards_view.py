@@ -1,10 +1,15 @@
-"""Offscreen tests for the flashcard list row actions (#60).
+"""Offscreen tests for the flashcard list row actions (#60) and the
+Due-today filter (#61).
 
 Delete asks for confirmation and removes the row; edit corrects the
 question through a small dialog; both refresh the list immediately and
 neither disturbs the card's scheduling state. The confirm and the
 dialog are monkeypatched seams (`_confirm_delete` / `_prompt_question`),
 exactly like the library's `_confirm_removal`.
+
+The 📅 Due today toggle (#61) switches the table between every card and
+exactly the Review session's set — same `list_due_cards(conn,
+end_of_local_day_utc())` cutoff — and stays usable at zero and many due.
 """
 import os
 
@@ -21,9 +26,11 @@ from PyQt6.QtWidgets import QApplication, QWidget
 from services.extract_store import (
     create_flashcard,
     init_schema,
+    list_due_cards,
     list_flashcards,
     record_review,
 )
+from services.fsrs_scheduler import end_of_local_day_utc
 from views.flashcards_view import FlashcardsView, _EditQuestionDialog
 
 
@@ -68,6 +75,36 @@ def row_of(view, question):
         if view.table.item(row, 0).text() == question:
             return row
     raise AssertionError(f"no row for {question!r}")
+
+
+def _iso(dt):
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def seed_due_spread(conn):
+    """One card per due category: overdue, later-today, tomorrow, and
+    brand-new (due now). 'Later today' is pinned to the local cutoff so
+    the test can't flake near midnight."""
+    now = datetime.now(timezone.utc)
+    cutoff = end_of_local_day_utc()
+    overdue = create_flashcard(
+        conn, "Overdue?", "A", due_utc=_iso(now - timedelta(days=2))
+    )
+    later = create_flashcard(
+        conn, "LaterToday?", "B", due_utc=_iso(cutoff - timedelta(hours=1))
+    )
+    tomorrow = create_flashcard(
+        conn, "Tomorrow?", "C", due_utc=_iso(cutoff + timedelta(hours=1))
+    )
+    fresh = create_flashcard(conn, "New?", "D")
+    return overdue, later, tomorrow, fresh
+
+
+def visible_ids(view):
+    return [
+        view.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        for row in range(view.table.rowCount())
+    ]
 
 
 def test_row_actions_arm_only_with_a_selection(app, conn, monkeypatch):
@@ -245,3 +282,97 @@ def test_edit_dialog_prefills_and_gates_save(app):
     dialog.question_edit.setText("New wording?")
     assert dialog.save_btn.isEnabled()
     assert dialog.question() == "New wording?"
+
+
+# ------------------------------------------------------------
+# Due-today filter (#61)
+# ------------------------------------------------------------
+
+
+def test_filter_defaults_off_and_toggles_to_the_review_set(
+    app, conn, monkeypatch
+):
+    """(#61 AC) The toggle starts on All; flipping it shows exactly the
+    Review session's set — overdue, later-today and new cards in, the
+    tomorrow card out — and flipping back restores every row."""
+    overdue, later, tomorrow, fresh = seed_due_spread(conn)
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    assert not view.due_toggle.isChecked()
+    assert view.table.rowCount() == 4
+
+    view.due_toggle.click()  # -> Due today
+
+    assert view.due_toggle.isChecked()
+    assert sorted(visible_ids(view)) == sorted(
+        c.id for c in list_due_cards(conn, end_of_local_day_utc())
+    )
+    assert tomorrow not in visible_ids(view)
+    assert {overdue, later, fresh} == set(visible_ids(view))
+
+    view.due_toggle.click()  # -> All
+
+    assert not view.due_toggle.isChecked()
+    assert view.table.rowCount() == 4
+
+
+def test_filter_zero_due_stays_usable(app, conn, monkeypatch):
+    """(#61 AC) With nothing due, Due-today shows the existing empty
+    state (no blank table) and All brings the card back."""
+    tomorrow = create_flashcard(
+        conn, "Tomorrow?", "A",
+        due_utc=_iso(end_of_local_day_utc() + timedelta(hours=1)),
+    )
+    view = make_view(conn, monkeypatch)
+    view.show()
+    view.due_toggle.click()
+
+    assert view.table.rowCount() == 0
+    assert not view.table.isVisible()
+    assert view.due_hint.isVisible()
+    assert view.due_hint.text() == "No cards due today"
+    assert not view.review_btn.isEnabled()
+
+    view.due_toggle.click()  # back to All
+
+    assert view.table.isVisible()
+    assert visible_ids(view) == [tomorrow]
+
+
+def test_filter_many_due_matches_review_button_and_keeps_row_actions(
+    app, conn, monkeypatch
+):
+    """(#61 AC) Every due card shows under the filter, the Review
+    button's count agrees, and delete still works on a visible row."""
+    overdue, later, tomorrow, fresh = seed_due_spread(conn)
+    view = make_view(conn, monkeypatch)
+    view.show()
+    view.due_toggle.click()
+
+    assert view.table.rowCount() == 3
+    assert view.review_btn.text() == "▶ Review (3)"
+    assert tomorrow not in visible_ids(view)
+
+    view.table.selectRow(row_of(view, "New?"))
+    assert view.delete_btn.isEnabled()
+    monkeypatch.setattr(view, "_confirm_delete", lambda q: True)
+    view.delete_btn.click()
+
+    assert view.table.rowCount() == 2
+    assert fresh not in visible_ids(view)
+    assert tomorrow not in visible_ids(view)
+    remaining = {c.question for c in list_flashcards(conn)}
+    assert remaining == {"Overdue?", "LaterToday?", "Tomorrow?"}
+
+
+def test_filter_with_no_cards_shows_the_empty_state(app, conn, monkeypatch):
+    """(#61) An empty library keeps the 'No flashcards yet' state under
+    either toggle position."""
+    view = make_view(conn, monkeypatch)
+    view.show()
+    view.due_toggle.click()
+
+    assert not view.table.isVisible()
+    assert view.empty_label.isVisible()
+    assert "No flashcards yet" in view.empty_label.text()

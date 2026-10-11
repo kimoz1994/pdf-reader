@@ -148,7 +148,7 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 ## Future work
 
-1. Flashcards: creation, listing, and the FSRS review session shipped (#55/#56/#57/#58), including session completion behaviors — Again re-queue within a fixed total, "n of m" progress, end-of-session summary, "No cards due today" hint (#59) and list row actions — edit question / delete card with confirmation (#60). Remaining: due-today list toggle (#61), source jump (#62), docs pass (#63).
+1. Flashcards: creation, listing, and the FSRS review session shipped (#55/#56/#57/#58), including session completion behaviors — Again re-queue within a fixed total, "n of m" progress, end-of-session summary, "No cards due today" hint (#59) — list row actions — edit question / delete card with confirmation (#60) — and the All ⇄ Due-today list toggle that shows exactly the Review session's set (#61). Remaining: source jump (#62), docs pass (#63).
 2. Standalone packaging (e.g. PyInstaller), CI with lint + smoke checks.
 
 ## Self-evaluation
