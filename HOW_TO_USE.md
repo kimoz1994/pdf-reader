@@ -101,7 +101,27 @@ Ever forget where a highlight came from? In the Extracts view, click **↱ Jump*
 
 Your read progress is untouched. The reader's **◀ Back** button then takes you to whichever view you came from — the **Extracts list** after a jump, the **Library** when you opened the PDF from there.
 
-### 6. Close and come back later
+### 6. Turn a passage into a flashcard and review it
+
+Flashcards quiz you on the passages you captured: a question on the front, your selected text and images on the back, resurfaced on a schedule (FSRS — the algorithm behind Anki).
+
+**Make one (concrete example):**
+
+1. Open any Extract in the **Extract Editor** (📝 Extracts → double-click a row — the one you captured in step 3 of this walkthrough is fine).
+2. Drag over the sentence you want to be quizzed on — that selection becomes the **answer**. (In `test.pdf`, the "SuperMemo is easy if…" bullet on page 28 works well.)
+3. Press **`Ctrl+K`** — or right-click the selection → **🃏 Make flashcard…** — or click **🃏 Make flashcard** in the editor toolbar. All three do the same thing: a dialog opens showing your selection as the answer preview, images inline.
+4. Type the **question** — e.g. `What makes SuperMemo easy to start?` — and press **`Enter`** (or **Add Flashcard**). Done: the answer is copied at that moment, so editing the Extract later never changes the card. `Esc` in the dialog cancels without saving.
+
+**Review it:**
+
+5. Click **🃏 Flashcards** in the sidebar — your new card is at the top of the list, and **Next due** shows today's timestamp (fresh cards are due immediately).
+6. Click **▶ Review (1)** — the session opens on your card, question first, progress "1 of 1".
+7. Press **`Space`** — the answer appears (read-only, images included). Judge yourself, then grade: **`1` Again**, **`2` Hard**, **`3` Good**, **`4` Easy**.
+8. Press **`3`** (Good, say) — the scheduler computes the next due time (a first-time Good keeps a new card due again **later today**, so it stays in today's set), the session ends with a one-line summary, and **Close** takes you back to the list. The **Next due** column shows the new time. Click **📅 Due today**: the card is still listed because it is still due today — a card graded into a later day disappears from that filter until its day comes round. Click the toggle again for All.
+
+More entry points (right-click an image alone to card it), image-only cards, edit/delete, the **📅 Due today** filter and source jumps are covered under [Flashcards (make & list)](#flashcards-make--list) and [Review your cards (FSRS)](#review-your-cards-fsrs) below.
+
+### 7. Close and come back later
 
 Everything — your library, your read position, your blue extracts — lives in a small local database (`library.db`). Just start the app again and carry on.
 
@@ -174,6 +194,6 @@ Nothing is due? The Review button is **disabled (0)** and an orange **"No cards 
 
 ## Not available yet (honest list)
 
-No feature is currently queued — everything designed is in the app today. The one tracked follow-up is the **docs pass** (#63): a top-to-bottom rewrite of this guide so every example and screenshot matches the current UI.
+No feature is currently queued — everything designed is in the app today. The one tracked follow-up is **standalone packaging** (an installer so you can run the app without a Python environment).
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).
