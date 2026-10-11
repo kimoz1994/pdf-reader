@@ -1,8 +1,9 @@
 """Library removal UX (#72): per-row checkboxes drive a count-enabled
 Remove button, with select-all and the Del key; rows whose file is gone
 stay listed so they can be removed too. Plus the 💾 Backup button (#83):
-one click snapshots library.db into backups/. Offscreen widget tests
-over a temp database."""
+one click snapshots library.db into backups/. Plus Back-visit skip (#89):
+progress refreshes a row in place and a clean list never rebuilds.
+Offscreen widget tests over a temp database."""
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,6 +16,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+from main_window import MainWindow
 from views.library_view import LibraryView
 
 
@@ -209,3 +211,101 @@ def test_backup_button_writes_a_real_openable_snapshot(view, tmp_path, monkeypat
         assert copy.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 2
     finally:
         copy.close()
+
+
+def _row_by_path(view, path):
+    for r in rows(view):
+        if r.path == str(path):
+            return r
+    raise AssertionError(f"no row for {path}")
+
+
+class _StubStack:
+    """Pure-Python stand-in for the view stack: no Qt ownership, so the
+    temp MainWindow can't delete the fixture's LibraryView on GC."""
+
+    def __init__(self):
+        self.shown = None
+
+    def setCurrentWidget(self, widget):
+        self.shown = widget
+
+
+def _bare_main_window(view):
+    """Uninitialized MainWindow holding just what show_library touches
+    (#89) — constructing a real one would hit the real library.db."""
+    win = MainWindow.__new__(MainWindow)
+    win.library_view = view
+    win.stacked_widget = _StubStack()
+    win.library_btn = None
+    win._set_active_sidebar = lambda btn: None
+    return win
+
+
+def test_needs_rebuild_false_after_startup(view):
+    """(#89) The initial load already built the rows."""
+    assert view.needs_rebuild() is False
+
+
+def test_update_progress_refreshes_row_in_place(view, tmp_path, monkeypatch):
+    """(#89) Page changes land on the existing row widget — no rebuild,
+    no wiped checkboxes, DB write intact."""
+    seed(view, tmp_path / "a.pdf", total_pages=3, current_page=1)
+    seed(view, tmp_path / "b.pdf", total_pages=3, current_page=1)
+    view.load_library()
+    row_widget = _row_by_path(view, tmp_path / "a.pdf")
+
+    rebuilds = []
+    monkeypatch.setattr(view, "_rebuild_library_list", lambda: rebuilds.append(1))
+
+    view.update_progress(str(tmp_path / "a.pdf"), 2)
+
+    assert rebuilds == []
+    assert _row_by_path(view, tmp_path / "a.pdf") is row_widget  # same widget
+    assert row_widget.page_label.text() == "Page 2 / 3"
+    assert row_widget.progress_bar.value() == 66
+    assert view.needs_rebuild() is False
+    got = view.cursor.execute(
+        "SELECT current_page FROM pdfs WHERE path = ?", (str(tmp_path / "a.pdf"),)
+    ).fetchone()[0]
+    assert got == 2, "DB write must still happen"
+
+
+def test_update_progress_unknown_path_is_a_noop(view, tmp_path):
+    """(#89) Progress for a PDF that isn't listed must not crash or dirty
+    the list."""
+    seed(view, tmp_path / "a.pdf")
+    view.load_library()
+    view.update_progress(str(tmp_path / "not-listed.pdf"), 7)
+    assert view.pdf_list.count() == 1
+    assert view.needs_rebuild() is False
+
+
+def test_show_library_skips_rebuild_when_rows_are_clean(view, tmp_path, monkeypatch):
+    """(#89 AC) Back to a clean list does not clear/re-create the rows."""
+    seed(view, tmp_path / "a.pdf")
+    view.load_library()
+    rebuilds = []
+    monkeypatch.setattr(view, "_rebuild_library_list", lambda: rebuilds.append(1))
+
+    win = _bare_main_window(view)
+    MainWindow.show_library(win)
+
+    assert win.stacked_widget.shown is view
+    assert rebuilds == []
+    assert view.pdf_list.count() == 1
+
+
+def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
+    """(#89) A marked-dirty view still rebuilds through show_library."""
+    seed(view, tmp_path / "a.pdf")
+    view.load_library()
+    view._structural_dirty = True
+    rebuilds = []
+    monkeypatch.setattr(view, "_rebuild_library_list", lambda: rebuilds.append(1))
+
+    win = _bare_main_window(view)
+    MainWindow.show_library(win)
+
+    assert rebuilds == [1]
+    assert view.needs_rebuild() is False  # load_library cleared the flag

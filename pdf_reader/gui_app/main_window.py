@@ -229,10 +229,15 @@ class MainWindow(QMainWindow):
             )
 
     def show_library(self):
-        """Show library view"""
+        """Show library view — rebuild rows only when the PDF set changed
+        (#89): Back from the reader used to clear and re-create every row
+        (widget construction + a Path().exists() per file) on each
+        navigation; progress itself is refreshed in place by
+        update_progress, so a clean list needs no rebuild."""
         with perf_span("main.show_library"):
             self.stacked_widget.setCurrentWidget(self.library_view)
-            self.library_view.load_library()
+            if self.library_view.needs_rebuild():
+                self.library_view.load_library()
             self.library_view.setFocus()
             self._set_active_sidebar(self.library_btn)
 
