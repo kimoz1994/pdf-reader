@@ -34,6 +34,7 @@ from services.extract_store import (
     capture_overlaps_extract,
     commit_working_set as store_commit_working_set,
     delete_extract,
+    list_capture_rects_for_doc,
     list_extracts_for_doc,
     resolve_doc_id,
 )
@@ -594,10 +595,10 @@ class PDFReaderView(QWidget):
                 self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             self.zoom_label.setText("Zoom: Fit")
 
-            # Re-draw persisted extracts (blue) for this document
-            with perf_span("load_pdf: extract load"):
-                self._load_extracts_from_db()
-                self._refresh_highlights()
+            # Blue extracts load exactly once per open (#88): in
+            # show_pdf_view -> reload_extract_captures, not here too.
+            # _reset_extract_state already cleared extract_captures, so
+            # any refresh triggered by the jump below draws nothing yet.
 
             # Jump to saved page
             with perf_span("load_pdf: jump"):
@@ -1255,7 +1256,9 @@ class PDFReaderView(QWidget):
             self._refresh_highlights()
 
     def _load_extracts_from_db(self):
-        """Reload blue extract rects for the current document from the DB."""
+        """Reload blue extract rects for the current document from the DB.
+
+        Uses the geometry-only seam (#88): one query, never the image blobs."""
         self.extract_captures = []
         doc_id = self._current_doc_id()
         if doc_id is None:
@@ -1263,10 +1266,7 @@ class PDFReaderView(QWidget):
         conn = self._db_conn()
         if conn is None:
             return
-        captures = []
-        for extract in list_extracts_for_doc(conn, doc_id):
-            captures.extend(extract.captures)
-        self.extract_captures = captures
+        self.extract_captures = list_capture_rects_for_doc(conn, doc_id)
 
     def commit_working_set(self):
         """Persist the Working Set as one Extract and refresh blue re-draws."""

@@ -18,6 +18,7 @@ from services.extract_store import (
     displayed_image_count,
     get_flashcard_images,
     init_schema,
+    list_capture_rects_for_doc,
     list_docs_with_extracts,
     list_due_cards,
     list_extracts_for_doc,
@@ -378,6 +379,59 @@ def test_list_extracts_includes_captures_and_blob(conn):
     assert len(e.captures) == 2
     assert e.captures[0].rect == (0, 0, 1, 1)
     assert e.captures[1].page == 1
+
+
+def test_list_capture_rects_is_geometry_only_single_query(conn):
+    """(#88) The reader seam returns page/rect/kind with NO blobs or text,
+    in exactly one statement — the old path ran N+1 queries fetching
+    image_blob per capture."""
+    doc_id = seed_pdf(conn)
+    commit_working_set(
+        conn,
+        doc_id,
+        [
+            Capture(page=0, rect=(0, 0, 1, 1), kind="text", text_content="alpha"),
+            Capture(page=1, rect=(2, 2, 3, 3), kind="image",
+                    image_blob=b"\x89PNG-fake"),
+        ],
+    )
+
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        rects = list_capture_rects_for_doc(conn, doc_id)
+    finally:
+        conn.set_trace_callback(None)
+
+    assert len(rects) == 2
+    assert rects[0].page == 0 and rects[0].rect == (0, 0, 1, 1)
+    assert rects[0].kind == "text"
+    assert rects[0].text_content is None
+    assert rects[1].page == 1 and rects[1].kind == "image"
+    assert rects[1].image_blob is None  # never fetched (#88)
+    assert len(statements) == 1, f"expected 1 query, got {len(statements)}"
+
+
+def test_list_capture_rects_skips_pasted_and_scopes_to_doc(conn):
+    """(#48) Pasted images (page/rect NULL) have no location to redraw and
+    must not leak in; other documents' captures must not either."""
+    doc_a = seed_pdf(conn, "/tmp/a.pdf", "a.pdf")
+    doc_b = seed_pdf(conn, "/tmp/b.pdf", "b.pdf")
+    commit_working_set(conn, doc_a, [Capture(0, (0, 0, 1, 1), "text", "in A")])
+    commit_working_set(conn, doc_b, [Capture(0, (5, 5, 6, 6), "text", "in B")])
+    # a pasted capture: page/rect NULL
+    extract_a = list_extracts_for_doc(conn, doc_a)[0].id
+    conn.execute(
+        "INSERT INTO captures (extract_id, page, rect, kind, image_blob) "
+        "VALUES (?, NULL, NULL, 'image', ?)",
+        (extract_a, b"png"),
+    )
+    conn.commit()
+
+    a_rects = list_capture_rects_for_doc(conn, doc_a)
+    b_rects = list_capture_rects_for_doc(conn, doc_b)
+    assert [(c.page, c.rect) for c in a_rects] == [(0, (0, 0, 1, 1))]
+    assert [(c.page, c.rect) for c in b_rects] == [(0, (5, 5, 6, 6))]
 
 
 def test_resolve_doc_id(conn):

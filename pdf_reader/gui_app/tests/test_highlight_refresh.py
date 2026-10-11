@@ -150,3 +150,23 @@ def test_on_page_changed_persists_only_via_signal(view, app):
     view.on_page_changed(1)
     assert seen == [("/some/file.pdf", 2)]
     assert calls == [], "on_page_changed must not execute UPDATE/commit itself"
+
+
+def test_open_path_loads_extracts_exactly_once(view, app, fixture_pdf):
+    """(#88) load_pdf must NOT load extracts — the show path's
+    reload_extract_captures does it, so a double-click open runs the
+    (N+1, blob-heavy) query once, not twice."""
+    calls = []
+    real = view._load_extracts_from_db
+
+    def counting():
+        calls.append(1)
+        real()
+
+    view._load_extracts_from_db = counting
+    view.load_pdf(fixture_pdf)
+    app.processEvents()
+    assert calls == [], "load_pdf must not load extracts (#88)"
+
+    view.reload_extract_captures()
+    assert calls == [1], "re-show loads exactly once"

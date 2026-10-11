@@ -378,6 +378,28 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
 _PREVIEW_LEN = 60
 
 
+def list_capture_rects_for_doc(conn, doc_id: int) -> List[Capture]:
+    """Geometry-only Captures of a Document's Extracts (#88): ONE query, no
+    `image_blob`, no text. The reader's blue re-draw maps page/rect only —
+    pulling blobs here dragged megabytes through sqlite per open once image
+    Extracts existed. The Extract Editor and flashcard review keep using
+    `list_extracts_for_doc` (they need the blobs and text). Pasted images
+    (page/rect NULL, #48) are skipped: they have no location to redraw."""
+    rows = conn.execute(
+        """
+        SELECT page, rect, kind FROM captures
+        WHERE extract_id IN (SELECT id FROM extracts WHERE doc_id = ?)
+          AND page IS NOT NULL AND rect IS NOT NULL
+        ORDER BY id ASC
+        """,
+        (doc_id,),
+    ).fetchall()
+    return [
+        Capture(page=page, rect=_rect_from_str(rect), kind=kind)
+        for page, rect, kind in rows
+    ]
+
+
 def preview_for_extract(extract: Extract) -> str:
     """One-line content preview for an Extract's row in the tree.
 
