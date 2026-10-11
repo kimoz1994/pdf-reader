@@ -731,6 +731,40 @@ class ExtractsView(QWidget):
             return
         self._open_editor(item)
 
+    def open_extract(self, doc_id, extract_id):
+        """Open the Extract Editor for `extract_id` (#62) — the
+        Flashcards' Source-jump landing. Searches the current tree the
+        same way a double-click would; when the row isn't there yet
+        (the tree was built before the card list was), refresh once and
+        retry. A still-missing Extract (deleted since) is a silent
+        no-op — returns whether the editor is open on it now."""
+        item = self._find_extract_item(doc_id, extract_id)
+        if item is None:
+            self.refresh()
+            item = self._find_extract_item(doc_id, extract_id)
+        if item is None:
+            return False
+        if self._editor_open:
+            # One editor at a time — the tree path closes before it
+            # opens; a stale editor's return refs die with this swap.
+            self._close_editor()
+        self._open_editor(item)
+        return self._editor_open
+
+    def _find_extract_item(self, doc_id, extract_id):
+        """The tree's child item for (doc_id, extract_id), or None."""
+        for i in range(self.tree.topLevelItemCount()):
+            doc_item = self.tree.topLevelItem(i)
+            doc_data = doc_item.data(0, Qt.ItemDataRole.UserRole) or {}
+            if doc_data.get("doc_id") != doc_id:
+                continue
+            for j in range(doc_item.childCount()):
+                child = doc_item.child(j)
+                data = child.data(0, Qt.ItemDataRole.UserRole) or {}
+                if data.get("extract_id") == extract_id:
+                    return child
+        return None
+
     def _open_editor(self, item):
         """Open the editor for the Extract owning `item`. Document rows
         are a no-op (they own no single Extract). The parent fallback

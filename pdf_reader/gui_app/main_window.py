@@ -98,6 +98,9 @@ class MainWindow(QMainWindow):
         self.pdf_view.progress_changed.connect(self.on_progress_changed)
         self.pdf_view.progress_changed.connect( self.library_view.update_progress)
         self.extracts_view.jump_requested.connect(self.on_extract_jump)
+        self.flashcards_view.source_jump_requested.connect(
+            self.on_flashcard_source
+        )
         
         # Show library by default
         self.show_library()
@@ -277,6 +280,13 @@ class MainWindow(QMainWindow):
         self.current_pdf_path = pdf_path
         self.pdf_view.load_pdf(pdf_path)
         self.show_pdf_view()
+
+    def on_flashcard_source(self, extract_id: int, doc_id: int):
+        """(#62) Flashcards' Source click → the source Extract in the
+        Extract Editor, via the same navigation the sidebar uses
+        (show the Extracts View, which refreshes its tree first)."""
+        self.show_extracts()
+        self.extracts_view.open_extract(doc_id, extract_id)
 
     def on_extract_jump(self, target: dict):
         """Jump from the Extracts View to a Capture's original region."""

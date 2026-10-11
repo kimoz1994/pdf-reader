@@ -1287,6 +1287,59 @@ def test_list_flashcards_survives_source_removal(conn):
     assert cards[0].source_path is None
 
 
+def test_list_flashcards_reports_extract_exists(conn):
+    """(#62) The source-jump seam: a live Extract is reported so the
+    view can offer the jump affordance."""
+    doc_id = seed_pdf(conn)
+    eid = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    create_flashcard(conn, "Q", "A", extract_id=eid, doc_id=doc_id)
+
+    cards = list_flashcards(conn)
+    assert cards[0].extract_exists is True
+
+
+def test_delete_extract_leaves_flashcards_untouched(conn):
+    """(#62 AC) No cascade: deleting the source Extract keeps the card
+    listed, marked `extract_exists = False` — the label/jump seam reads
+    that flag. A sibling card on another Extract is untouched too."""
+    doc_id = seed_pdf(conn)
+    doomed = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    kept = commit_working_set(
+        conn, doc_id, [Capture(1, (0, 0, 1, 1), "text", "y")]
+    )
+    create_flashcard(conn, "Q1", "A1", extract_id=doomed, doc_id=doc_id)
+    create_flashcard(conn, "Q2", "A2", extract_id=kept, doc_id=doc_id)
+
+    delete_extract(conn, doomed)
+
+    cards = {c.question: c for c in list_flashcards(conn)}
+    assert set(cards) == {"Q1", "Q2"}
+    assert cards["Q1"].extract_exists is False
+    assert cards["Q2"].extract_exists is True
+    assert conn.execute(
+        "SELECT COUNT(*) FROM flashcards"
+    ).fetchone()[0] == 2
+
+
+def test_list_due_cards_reports_extract_exists(conn):
+    """(#62) The Due-today filter reads the same flag — a card whose
+    Extract is gone still shows in today's set, jump hidden."""
+    doc_id = seed_pdf(conn, path="/tmp/due.pdf", name="due.pdf")
+    doomed = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    create_flashcard(conn, "Q", "A", extract_id=doomed, doc_id=doc_id)
+    delete_extract(conn, doomed)
+
+    due = list_due_cards(conn, datetime.now(timezone.utc) + timedelta(days=1))
+    assert len(due) == 1
+    assert due[0].extract_exists is False
+
+
 def test_create_flashcard_allows_null_source(conn):
     fc_id = create_flashcard(conn, "Q", "A")
     cards = list_flashcards(conn)

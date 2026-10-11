@@ -37,3 +37,41 @@ def test_flashcard_source_label_keeps_snapshot_and_marker():
 def test_flashcard_source_label_without_snapshot_falls_back():
     card = Flashcard(id=1, question="Q?", answer_text="A.")
     assert _source_label(card) == "(source removed)"
+
+
+def test_flashcard_extract_gone_keeps_name_and_marks_source_gone():
+    """(#62) A deleted source Extract keeps the document name and is
+    labeled 'source gone' — distinct from #70's removed-document marker."""
+    card = Flashcard(
+        id=1,
+        question="Q?",
+        answer_text="A.",
+        extract_id=5,
+        source_name="book",
+        source_path="C:/books/book.pdf",
+        extract_exists=False,
+    )
+    assert _source_label(card) == "book ⚠ source gone"
+
+
+def test_flashcard_extract_gone_without_name_falls_back():
+    card = Flashcard(
+        id=1, question="Q?", answer_text="A.", extract_id=5,
+        extract_exists=False,
+    )
+    assert _source_label(card) == "(source gone)"
+
+
+def test_flashcard_live_extract_keeps_plain_title():
+    """(#62) The happy path: a live source shows its title, no marker —
+    and it is the row the jump affordance targets."""
+    card = Flashcard(
+        id=1,
+        question="Q?",
+        answer_text="A.",
+        extract_id=5,
+        source_name="book",
+        source_path="C:/books/book.pdf",
+        extract_exists=True,
+    )
+    assert _source_label(card) == "book"
