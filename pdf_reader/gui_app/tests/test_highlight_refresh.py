@@ -11,6 +11,7 @@ import pymupdf
 import pytest
 from PyQt6.QtWidgets import QApplication
 
+from main_window import MainWindow
 from views.pdf_reader_view import PDFReaderView
 
 
@@ -170,3 +171,44 @@ def test_open_path_loads_extracts_exactly_once(view, app, fixture_pdf):
 
     view.reload_extract_captures()
     assert calls == [1], "re-show loads exactly once"
+
+
+class _StubStack:
+    """Enough of the view stack for MainWindow.show_pdf_view (#88):
+    pure Python, no Qt ownership."""
+
+    def __init__(self):
+        self.shown = None
+
+    def currentWidget(self):
+        return self.shown
+
+    def setCurrentWidget(self, widget):
+        self.shown = widget
+
+
+def test_open_pdf_shipped_path_loads_extracts_once(view, app, fixture_pdf):
+    """(#88) The real double-click path — MainWindow.open_pdf ->
+    load_pdf + show_pdf_view — runs the extract query exactly once
+    (the seam-level test above doesn't exercise the shipped wiring)."""
+    calls = []
+    real = view._load_extracts_from_db
+
+    def counting():
+        calls.append(1)
+        real()
+
+    view._load_extracts_from_db = counting
+
+    win = MainWindow.__new__(MainWindow)
+    win.pdf_view = view
+    win.current_pdf_path = None
+    win.stacked_widget = _StubStack()
+    win.pdf_reader_btn = None
+    win._set_active_sidebar = lambda btn: None
+
+    MainWindow.open_pdf(win, fixture_pdf)
+    app.processEvents()
+
+    assert win.stacked_widget.shown is view, "reader must be the shown view"
+    assert calls == [1], f"expected exactly 1 extract load, got {calls}"

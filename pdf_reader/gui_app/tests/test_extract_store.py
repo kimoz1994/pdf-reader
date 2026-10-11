@@ -22,6 +22,7 @@ from services.extract_store import (
     list_docs_with_extracts,
     list_due_cards,
     list_extracts_for_doc,
+    newest_extract_id_on_page,
     list_flashcards,
     preview_for_extract,
     record_review,
@@ -432,6 +433,37 @@ def test_list_capture_rects_skips_pasted_and_scopes_to_doc(conn):
     b_rects = list_capture_rects_for_doc(conn, doc_b)
     assert [(c.page, c.rect) for c in a_rects] == [(0, (0, 0, 1, 1))]
     assert [(c.page, c.rect) for c in b_rects] == [(0, (5, 5, 6, 6))]
+
+
+def test_newest_extract_id_on_page_one_query_no_blobs(conn):
+    """(#88) The `d`-delete probe: id only, one statement per call, and
+    None for a page with no Extract."""
+    doc_id = seed_pdf(conn)
+    older = commit_working_set(conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "old")])
+    newer = commit_working_set(conn, doc_id, [Capture(1, (2, 2, 3, 3), "text", "new")])
+
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        assert newest_extract_id_on_page(conn, doc_id, 0) == older
+        assert newest_extract_id_on_page(conn, doc_id, 1) == newer
+        assert newest_extract_id_on_page(conn, doc_id, 9) is None
+    finally:
+        conn.set_trace_callback(None)
+    assert len(statements) == 3, f"expected 3 queries, got {len(statements)}"
+
+
+def test_newest_extract_id_on_page_newest_wins_and_scopes(conn):
+    """(#88) Same page, two Extracts -> the newer id; other documents
+    never leak in."""
+    doc_a = seed_pdf(conn, "/tmp/a.pdf", "a.pdf")
+    doc_b = seed_pdf(conn, "/tmp/b.pdf", "b.pdf")
+    commit_working_set(conn, doc_a, [Capture(0, (0, 0, 1, 1), "text", "x")])
+    a_new = commit_working_set(conn, doc_a, [Capture(0, (2, 2, 3, 3), "text", "y")])
+    b_cap = commit_working_set(conn, doc_b, [Capture(0, (0, 0, 1, 1), "text", "z")])
+
+    assert newest_extract_id_on_page(conn, doc_a, 0) == a_new
+    assert newest_extract_id_on_page(conn, doc_b, 0) == b_cap
 
 
 def test_resolve_doc_id(conn):

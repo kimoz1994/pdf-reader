@@ -400,6 +400,24 @@ def list_capture_rects_for_doc(conn, doc_id: int) -> List[Capture]:
     ]
 
 
+def newest_extract_id_on_page(conn, doc_id: int, page: int):
+    """Id of the newest Extract that has a Capture on `page`, or None
+    (#88): ONE statement, never selecting `text_content`/`image_blob` —
+    this is the reader's `d`-delete probe, which only needs the id.
+    Matches `list_extracts_for_doc`'s newest-first order (id DESC)."""
+    row = conn.execute(
+        """
+        SELECT e.id FROM extracts e
+        JOIN captures c ON c.extract_id = e.id
+        WHERE e.doc_id = ? AND c.page = ?
+        ORDER BY e.id DESC
+        LIMIT 1
+        """,
+        (doc_id, page),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def preview_for_extract(extract: Extract) -> str:
     """One-line content preview for an Extract's row in the tree.
 

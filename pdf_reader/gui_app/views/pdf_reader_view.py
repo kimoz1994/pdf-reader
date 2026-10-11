@@ -35,7 +35,7 @@ from services.extract_store import (
     commit_working_set as store_commit_working_set,
     delete_extract,
     list_capture_rects_for_doc,
-    list_extracts_for_doc,
+    newest_extract_id_on_page,
     resolve_doc_id,
 )
 from services.element_detector import ElementDetector
@@ -1313,15 +1313,15 @@ class PDFReaderView(QWidget):
             self.working_label.setText("Extract deleted (d)")
 
     def _newest_extract_on_page(self):
-        """Id of the newest Extract that has a Capture on the current page."""
+        """Id of the newest Extract that has a Capture on the current page.
+
+        Uses the id-only seam (#88): the `d`-delete probe must never
+        select blobs either."""
         conn = self._db_conn()
         doc_id = self._current_doc_id()
         if conn is None or doc_id is None:
             return None
-        for extract in list_extracts_for_doc(conn, doc_id):
-            if any(c.page == self.last_visible_page for c in extract.captures):
-                return extract.id
-        return None
+        return newest_extract_id_on_page(conn, doc_id, self.last_visible_page)
 
     def _disarm_delete(self):
         """Cancel an armed delete without deleting (timeout or other key)."""
