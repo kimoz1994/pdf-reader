@@ -1,5 +1,5 @@
 """
-Flashcards View — the card list + FSRS review session (#54/#55/#58/#59/#60/#61).
+Flashcards View — the card list + FSRS review session (#54/#55/#58/#59/#60/#61/#62).
 
 One row per card: question, source document, created, next due — read
 from the headless store (`services.extract_store.list_flashcards`). The
@@ -18,7 +18,11 @@ review logs go with it, the source Extract stays). Due-today filter
 exactly the Review session's set (the same
 `list_due_cards(conn, end_of_local_day_utc())` cutoff — overdue,
 later-today and new cards in, tomorrow out), so the rows you see are
-always the rows a session would grade.
+always the rows a session would grade. Source jump (#62): a live
+Source cell reads as a link and clicking it opens the source Extract
+in the Extract Editor (via the Extracts View's navigation path); after
+the Extract or the Document is deleted the card survives with a
+'⚠ source gone' / '⚠ removed source' marker and the jump is hidden.
 """
 import random
 from datetime import datetime, timezone
@@ -38,8 +42,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 
 from services.extract_store import (
     delete_flashcard,
@@ -91,12 +95,42 @@ def _source_label(card):
     """Same document naming as the Extracts tree: metadata title when
     available, cleaned filename otherwise; a removed source keeps the
     Extract's name snapshot (#70) and is marked the same way the tree
-    marks it — `(source removed)` only when no snapshot exists."""
+    marks it — `(source removed)` only when no snapshot exists.
+
+    A deleted source Extract gets its own marker, 'source gone' (#62):
+    the document row may still be alive (its title keeps showing), but
+    the card's jump target is gone. Removed *documents* keep #70's
+    '⚠ removed source' marker."""
+    if card.extract_id is not None and not card.extract_exists:
+        # Same naming as the live label (cleaned title), marker on top.
+        base = (
+            display_title(card.source_path, card.source_name or "")
+            if card.source_path
+            else card.source_name
+        )
+        if base:
+            return f"{base} ⚠ source gone"
+        return "(source gone)"
     if not card.source_path and not card.source_name:
         return "(source removed)"
     if not card.source_path:
         return f"{card.source_name} ⚠ removed source"
     return display_title(card.source_path, card.source_name or "")
+
+
+def _jump_target(card):
+    """(#62) The Source cell's click payload for the row: the Extract
+    the jump should open, or None when there is nothing to jump to.
+
+    A jump needs a live Extract AND a live Document row — after either
+    is deleted the affordance is hidden (the card itself survives,
+    no cascade). The dict shape mirrors the Extracts tree's UserRole
+    payload so the navigation path is the same."""
+    if not card.extract_exists or card.extract_id is None:
+        return None
+    if not card.source_path or card.doc_id is None:
+        return None
+    return {"extract_id": card.extract_id, "doc_id": card.doc_id}
 
 
 class ReviewSessionDialog(QDialog):
@@ -351,6 +385,10 @@ class _EditQuestionDialog(QDialog):
 
 
 class FlashcardsView(QWidget):
+    # (#62) Clicking a live Source cell: (extract_id, doc_id) — the
+    # navigation path opens that Extract in the Extract Editor.
+    source_jump_requested = pyqtSignal(int, int)
+
     def __init__(self):
         super().__init__()
         self.setup_ui()
@@ -487,6 +525,9 @@ class FlashcardsView(QWidget):
         # beside the labels in the right-click menu — the app has no
         # menu bar, so that menu is the matching menu (#57's pattern).
         self.table.itemSelectionChanged.connect(self._sync_row_actions)
+        # Source jump (#62): the Source cell is a link only when its
+        # Extract + Document still exist — see _jump_target.
+        self.table.cellClicked.connect(self._on_cell_clicked)
         self.edit_action = QAction("✏️ Edit question…", self)
         self.edit_action.setShortcut(QKeySequence(Qt.Key.Key_F2))
         self.edit_action.setShortcutContext(
@@ -578,8 +619,34 @@ class FlashcardsView(QWidget):
                 if col == 0:
                     # The row actions need the real id, not the text.
                     item.setData(Qt.ItemDataRole.UserRole, card.id)
+                elif col == 1:
+                    # #62: a live source reads as a link (blue + hint)
+                    # and carries its jump payload; an orphaned or
+                    # removed source stays a plain cell, no payload.
+                    target = _jump_target(card)
+                    if target:
+                        item.setData(
+                            Qt.ItemDataRole.UserRole, target
+                        )
+                        item.setForeground(QBrush(QColor("#3498db")))
+                        item.setToolTip(
+                            "Click to open the source Extract"
+                        )
                 self.table.setItem(row, col, item)
         self._sync_row_actions()
+
+    def _on_cell_clicked(self, row, column):
+        """(#62) Source cell click -> the jump signal. Any other column
+        (and any cell with no payload: deleted Extract / removed
+        Document) is a plain cell — selecting the row is all it does."""
+        if column != 1:
+            return
+        item = self.table.item(row, 1)
+        target = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if target:
+            self.source_jump_requested.emit(
+                target["extract_id"], target["doc_id"]
+            )
 
     def _hide_table(self):
         """Empty, hidden table with row actions disarmed — the shared

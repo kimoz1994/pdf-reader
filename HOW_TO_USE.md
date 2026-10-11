@@ -128,6 +128,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Flashcards | Delete a card | select the row → **🗑 Delete** (or `Del`, or right-click → 🗑 Delete) — asks first |
 | Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled (with "No cards due today") when none |
 | Flashcards | Show only today's due cards | **📅 Due today** (orange while on — exactly the Review session's set); click again for All |
+| Flashcards | Open a card's source Extract | click the blue **Source** cell (live sources only — orphans show `⚠ source gone` and don't click) |
 | Review session | Reveal the answer | `Space` (or **Show answer**) |
 | Review session | Grade the card | `1` Again · `2` Hard · `3` Good · `4` Easy (or the buttons) |
 | Review session | Close early | `Esc` (graded cards stay graded) |
@@ -155,6 +156,8 @@ The answer is copied at that moment — text and image bytes alike — so editin
 
 **Only see what's due today**: click **📅 Due today** in the header — the list then shows exactly the cards a Review session would grade (same rule: overdue, due later today, and brand-new cards; tomorrow's cards stay hidden, sorted soonest-first). Click it again to return to **All**. With nothing due, the table hides and the orange "No cards due today" hint explains why.
 
+**Jump from a card to where it came from**: the **Source** column shows the document each card came from — in **blue** when it can be clicked. Clicking a blue source opens that Extract in the **Extract Editor** (the same view you get by double-clicking its row in the Extracts tree). Your study material is never lost when you clean up: if the source Extract was deleted, the card stays in the list, the source reads `⚠ source gone`, and it stops being clickable; if the whole PDF was removed from the library, the name stays with `⚠ removed source` (as before) and the jump is hidden too.
+
 ### Review your cards (FSRS)
 
 The green **▶ Review (n)** button shows how many cards are due **today** (brand-new cards are due immediately; graded cards resurface when the scheduler says so). Clicking it starts a session:
@@ -171,8 +174,6 @@ Nothing is due? The Review button is **disabled (0)** and an orange **"No cards 
 
 ## Not available yet (honest list)
 
-These are designed and queued — don't look for them in the app today:
-
-- **Jump from a card to its source Extract** (queued as #62) — the list shows the source document name (and `⚠ removed source` for orphans), but clicking through to the Extract or the reader page isn't wired up yet.
+No feature is currently queued — everything designed is in the app today. The one tracked follow-up is the **docs pass** (#63): a top-to-bottom rewrite of this guide so every example and screenshot matches the current UI.
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).

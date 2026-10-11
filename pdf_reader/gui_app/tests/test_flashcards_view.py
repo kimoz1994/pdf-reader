@@ -1,5 +1,5 @@
-"""Offscreen tests for the flashcard list row actions (#60) and the
-Due-today filter (#61).
+"""Offscreen tests for the flashcard list row actions (#60), the
+Due-today filter (#61), and the Source-cell jump (#62).
 
 Delete asks for confirmation and removes the row; edit corrects the
 question through a small dialog; both refresh the list immediately and
@@ -10,6 +10,10 @@ exactly like the library's `_confirm_removal`.
 The 📅 Due today toggle (#61) switches the table between every card and
 exactly the Review session's set — same `list_due_cards(conn,
 end_of_local_day_utc())` cutoff — and stays usable at zero and many due.
+
+Source jump (#62): a live Source cell carries the jump payload and
+emits `source_jump_requested`; a deleted Extract or removed Document
+leaves the card listed (no cascade) with the jump hidden.
 """
 import os
 
@@ -24,7 +28,10 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from services.extract_store import (
+    Capture,
+    commit_working_set,
     create_flashcard,
+    delete_extract,
     init_schema,
     list_due_cards,
     list_flashcards,
@@ -376,3 +383,109 @@ def test_filter_with_no_cards_shows_the_empty_state(app, conn, monkeypatch):
     assert not view.table.isVisible()
     assert view.empty_label.isVisible()
     assert "No flashcards yet" in view.empty_label.text()
+
+
+# ------------------------------------------------------------
+# Source jump (#62): click the Source cell -> the Extract Editor
+# ------------------------------------------------------------
+
+
+def seed_sourced_card(conn, question):
+    """A live document + Extract + card on it; returns (doc_id, eid)."""
+    conn.execute(
+        "INSERT INTO pdfs (path, name, total_pages, current_page) "
+        "VALUES (?, ?, 3, 1)",
+        ("C:/tmp/book.pdf", "book.pdf"),
+    )
+    conn.commit()
+    doc_id = conn.execute(
+        "SELECT id FROM pdfs WHERE path = ?", ("C:/tmp/book.pdf",)
+    ).fetchone()[0]
+    eid = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    create_flashcard(conn, question, "A", extract_id=eid, doc_id=doc_id)
+    return doc_id, eid
+
+
+def click_source(view, question):
+    """Pretend the Source cell of `question`'s row was clicked."""
+    view.table.cellClicked.emit(row_of(view, question), 1)
+
+
+def test_source_cell_click_emits_jump_for_live_source(app, conn, monkeypatch):
+    """(#62 AC) Clicking a live Source cell emits the jump payload the
+    navigation path needs, and the cell is styled as a link."""
+    doc_id, eid = seed_sourced_card(conn, "Sourced?")
+    view = make_view(conn, monkeypatch)
+    view.show()
+    hits = []
+    view.source_jump_requested.connect(lambda e, d: hits.append((e, d)))
+
+    click_source(view, "Sourced?")
+
+    assert hits == [(eid, doc_id)]
+    cell = view.table.item(row_of(view, "Sourced?"), 1)
+    assert cell.data(Qt.ItemDataRole.UserRole) == {
+        "extract_id": eid,
+        "doc_id": doc_id,
+    }
+    assert cell.foreground().color().name() == "#3498db"
+    assert "Extract" in cell.toolTip()
+
+
+def test_source_click_dead_for_deleted_extract(app, conn, monkeypatch):
+    """(#62 AC) The card survives delete_extract with no cascade, shows
+    the 'source gone' marker, and its jump is hidden — clicking does
+    nothing."""
+    doc_id, eid = seed_sourced_card(conn, "Orphan?")
+    delete_extract(conn, eid)
+    view = make_view(conn, monkeypatch)
+    view.show()
+    hits = []
+    view.source_jump_requested.connect(lambda e, d: hits.append((e, d)))
+    cell = view.table.item(row_of(view, "Orphan?"), 1)
+
+    click_source(view, "Orphan?")
+
+    assert hits == []
+    assert cell.text() == "book ⚠ source gone"
+    assert cell.data(Qt.ItemDataRole.UserRole) is None
+    assert cell.foreground().color().name() != "#3498db"
+    assert cell.toolTip() == ""
+
+
+def test_source_click_dead_for_removed_document(app, conn, monkeypatch):
+    """(#62 AC) The Document row deleted = no jump either; #70's
+    name-keeping marker stays on the cell."""
+    doc_id, _eid = seed_sourced_card(conn, "NoDoc?")
+    conn.execute("DELETE FROM pdfs WHERE id = ?", (doc_id,))
+    conn.commit()
+    view = make_view(conn, monkeypatch)
+    view.show()
+    hits = []
+    view.source_jump_requested.connect(lambda e, d: hits.append((e, d)))
+
+    click_source(view, "NoDoc?")
+
+    assert hits == []
+    cell = view.table.item(row_of(view, "NoDoc?"), 1)
+    assert cell.text() == "book ⚠ removed source"
+    assert cell.data(Qt.ItemDataRole.UserRole) is None
+    assert cell.toolTip() == ""
+
+
+def test_source_click_column_guard(app, conn, monkeypatch):
+    """(#62) Only the Source column jumps — clicking Question/Created/
+    Next due never emits, even on a live-source row."""
+    seed_sourced_card(conn, "Sourced?")
+    view = make_view(conn, monkeypatch)
+    view.show()
+    hits = []
+    view.source_jump_requested.connect(lambda e, d: hits.append((e, d)))
+    row = row_of(view, "Sourced?")
+
+    for col in (0, 2, 3):
+        view.table.cellClicked.emit(row, col)
+
+    assert hits == []

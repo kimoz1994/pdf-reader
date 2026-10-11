@@ -74,6 +74,9 @@ class Flashcard:
     source_name: Optional[str] = None  # from pdfs, or the Extract's
     # doc_name snapshot when the row is gone (#70)
     source_path: Optional[str] = None  # joined from pdfs, for display_title
+    extract_exists: bool = True  # the joined Extract row is still there
+    # (#62): False after `delete_extract` — the card survives (no
+    # cascade) and the view hides its jump affordance
 
 
 def init_schema(conn) -> None:
@@ -677,6 +680,8 @@ def delete_extract(conn, extract_id: int) -> None:
     `ON DELETE CASCADE` — but the caller must have foreign-key support
     enabled on the connection for that rule to fire. To stay safe either
     way, captures are removed explicitly in the same transaction.
+    Flashcards are NOT touched: no cascade, the card survives and
+    `list_flashcards` reports `extract_exists = False` (#62).
     """
     conn.execute("DELETE FROM captures WHERE extract_id = ?", (extract_id,))
     conn.execute("DELETE FROM extracts WHERE id = ?", (extract_id,))
@@ -739,12 +744,15 @@ def list_flashcards(conn) -> List[Flashcard]:
     LEFT JOIN mirrors `list_docs_with_extracts`: the source pdfs row may
     be gone — the card survives and the name falls back to its Extract's
     `doc_name` snapshot (#70), None only when no snapshot exists (#54).
+    `e.id IS NOT NULL` reports whether the Extract itself still exists
+    (#62) — `delete_extract` doesn't cascade, so the card survives it.
     """
     rows = conn.execute(
         """
         SELECT f.id, f.question, f.answer_text, f.created_at, f.due_utc,
                f.fsrs_json, f.extract_id, f.doc_id,
-               COALESCE(p.name, e.doc_name), p.path
+               COALESCE(p.name, e.doc_name), p.path,
+               e.id IS NOT NULL
         FROM flashcards f
         LEFT JOIN pdfs p ON p.id = f.doc_id
         LEFT JOIN extracts e ON e.id = f.extract_id
@@ -763,6 +771,7 @@ def list_flashcards(conn) -> List[Flashcard]:
             doc_id=r[7],
             source_name=r[8],
             source_path=r[9],
+            extract_exists=bool(r[10]),
         )
         for r in rows
     ]
@@ -782,7 +791,8 @@ def list_due_cards(conn, due_before: datetime) -> List[Flashcard]:
         """
         SELECT f.id, f.question, f.answer_text, f.created_at, f.due_utc,
                f.fsrs_json, f.extract_id, f.doc_id,
-               COALESCE(p.name, e.doc_name), p.path
+               COALESCE(p.name, e.doc_name), p.path,
+               e.id IS NOT NULL
         FROM flashcards f
         LEFT JOIN pdfs p ON p.id = f.doc_id
         LEFT JOIN extracts e ON e.id = f.extract_id
@@ -803,6 +813,7 @@ def list_due_cards(conn, due_before: datetime) -> List[Flashcard]:
             doc_id=r[7],
             source_name=r[8],
             source_path=r[9],
+            extract_exists=bool(r[10]),
         )
         for r in rows
     ]
