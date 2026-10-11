@@ -215,18 +215,6 @@ class SearchHighlightOverlay(QWidget):
         self.current_rect = rect
         self.update()
 
-    def set_working_rects(self, rects: list[QRectF]):
-        self.working_rects = rects
-        self.update()
-
-    def set_extract_rects(self, rects: list[QRectF]):
-        self.extract_rects = rects
-        self.update()
-
-    def set_flash_rect(self, rect: QRectF | None):
-        self.flash_rect = rect
-        self.update()
-
     def set_rects(self, working, extracts, flash, current):
         """Set everything at once so the overlay repaints a single time (#87)."""
         self.working_rects = working
@@ -1138,9 +1126,10 @@ class PDFReaderView(QWidget):
         self._flash_region = None
         self._flash_timer.stop()
         self.working_label.setText("")
-        self.highlight_overlay.set_working_rects([])
-        self.highlight_overlay.set_extract_rects([])
-        self.highlight_overlay.set_flash_rect(None)
+        # One repaint (#87): clear the three extraction layers through the
+        # single-setter API, keeping the search rect untouched.
+        overlay = self.highlight_overlay
+        overlay.set_rects([], [], None, overlay.current_rect)
 
     def _db_conn(self):
         """The shared sqlite connection MainWindow keeps open, or None."""
