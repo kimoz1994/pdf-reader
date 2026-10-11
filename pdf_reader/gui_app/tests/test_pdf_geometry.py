@@ -256,3 +256,169 @@ def test_clip_widget_rect_to_page_disjoint_returns_zero_rect():
     rect = (200.0, 200.0, 300.0, 300.0)
     page = (0.0, 0.0, 100.0, 100.0)
     assert clip_widget_rect_to_page(rect, page) == (0.0, 0.0, 0.0, 0.0)
+
+
+# ------------------- #87 index cache: golden tests vs the naive loops -------------------
+# PageLayout precomputes per-page sizes and document offsets in __post_init__
+# (scroll-path hot loop). These reference functions are verbatim copies of the
+# pre-#87 algorithms; the index must agree with them for every input shape.
+
+def _naive_page_pixel_size(layout, i):
+    w_pt, h_pt = layout.page_sizes_pts[i]
+    scr = layout.screen_resolution
+    if layout.zoom_mode == FIT_TO_WIDTH:
+        base_w = qround_half_up(w_pt * scr)
+        available = layout.viewport_width - layout.margins.left - layout.margins.right
+        factor = available / base_w if base_w else 1.0
+        return (
+            qround_half_up(base_w * factor),
+            qround_half_up(qround_half_up(h_pt * scr) * factor),
+        )
+    return (
+        qround_half_up(w_pt * scr * layout.zoom),
+        qround_half_up(h_pt * scr * layout.zoom),
+    )
+
+
+def _naive_document_width(layout):
+    widths = [
+        _naive_page_pixel_size(layout, i)[0]
+        for i in range(len(layout.page_sizes_pts))
+    ]
+    return max(widths) + layout.margins.left + layout.margins.right
+
+
+def _naive_document_height(layout):
+    total = layout.margins.top
+    for i in range(len(layout.page_sizes_pts)):
+        _, h = _naive_page_pixel_size(layout, i)
+        total += h
+        if i < len(layout.page_sizes_pts) - 1:
+            total += layout.spacing
+    return total + layout.margins.bottom
+
+
+def _naive_page_top_left_doc(layout, i):
+    w, _ = _naive_page_pixel_size(layout, i)
+    page_x = (max(_naive_document_width(layout), layout.viewport_width) - w) // 2
+    page_y = layout.margins.top
+    for j in range(i):
+        _, h = _naive_page_pixel_size(layout, j)
+        page_y += h + layout.spacing
+    return (page_x, page_y)
+
+
+def _naive_widget_point_page_index(layout, point):
+    x, y = point
+    for i in range(len(layout.page_sizes_pts)):
+        px0, py0, px1, py1 = layout.page_rect_doc(i)
+        px0 -= layout.h_scroll - layout.viewport_offset[0]
+        py0 -= layout.v_scroll - layout.viewport_offset[1]
+        px1 -= layout.h_scroll - layout.viewport_offset[0]
+        py1 -= layout.v_scroll - layout.viewport_offset[1]
+        if px0 <= x <= px1 and py0 <= y <= py1:
+            return i
+    return None
+
+
+_GOLDEN_CASES = [
+    # portrait letters, custom zoom
+    dict(page_sizes_pts=PAGES_PTS, zoom=1.0, dpi=96.0),
+    dict(page_sizes_pts=PAGES_PTS, zoom=2.5, dpi=72.0),
+    # mixed portrait/landscape + wide/short pages
+    dict(
+        page_sizes_pts=[(612.0, 792.0), (792.0, 612.0), (100.0, 2000.0), (595.0, 842.0)],
+        zoom=1.25,
+        dpi=120.0,
+        margins=(6, 6, 6, 6),
+        spacing=12,
+        viewport_width=1440,
+        viewport_height=900,
+        h_scroll=13,
+        v_scroll=9876,
+        viewport_offset=(2, 5),
+    ),
+    # FitToWidth
+    dict(
+        page_sizes_pts=[(612.0, 792.0), (792.0, 612.0), (500.0, 500.0)],
+        zoom=1.0,
+        dpi=96.0,
+        margins=(6, 6, 6, 6),
+        spacing=12,
+        viewport_width=1440,
+        viewport_height=900,
+        zoom_mode=FIT_TO_WIDTH,
+        h_scroll=7,
+        v_scroll=12345,
+        viewport_offset=(1, 1),
+    ),
+    # FitToWidth with a zero-width page (degenerate factor guard)
+    dict(
+        page_sizes_pts=[(0.0, 792.0), (612.0, 792.0)],
+        zoom=1.0,
+        dpi=96.0,
+        viewport_width=800,
+        zoom_mode=FIT_TO_WIDTH,
+    ),
+    # viewport wider than the document (page centred in viewport)
+    dict(
+        page_sizes_pts=[(400.0, 800.0)],
+        zoom=1.0,
+        dpi=72.0,
+        viewport_width=800,
+        margins=(6, 6, 6, 6),
+    ),
+]
+
+
+@pytest.mark.parametrize("kwargs", _GOLDEN_CASES)
+def test_indexed_layout_matches_naive_reference(kwargs):
+    layout = PageLayout(**kwargs)
+    n = len(layout.page_sizes_pts)
+    for i in range(n):
+        assert layout.page_pixel_size(i) == _naive_page_pixel_size(layout, i)
+        assert layout.page_top_left_doc(i) == _naive_page_top_left_doc(layout, i)
+    assert layout.document_width() == _naive_document_width(layout)
+    assert layout.document_height() == _naive_document_height(layout)
+    for point in [
+        (0, 0),
+        (100, 500),
+        (45, 6),
+        (100000, 400),
+        (30, 100000),
+        (-5, -5),
+    ]:
+        assert (
+            layout.widget_point_page_index(point)
+            == _naive_widget_point_page_index(layout, point)
+        ), f"point={point} kwargs={kwargs}"
+
+
+def test_center_v_scroll_matches_naive_through_index():
+    layout = PageLayout(
+        [(612.0, 792.0), (792.0, 612.0)],
+        zoom=1.0,
+        dpi=96.0,
+        margins=(6, 6, 6, 6),
+        spacing=12,
+        viewport_width=1440,
+        viewport_height=700,
+        zoom_mode=FIT_TO_WIDTH,
+    )
+    rect = (100.0, 300.0, 500.0, 700.0)
+    got = center_v_scroll(layout, 1, rect)
+    # naive: rebuild the height sums by hand
+    _, h0 = _naive_page_pixel_size(layout, 0)
+    _, h1 = _naive_page_pixel_size(layout, 1)
+    doc_w = _naive_document_width(layout)
+    w1, _ = _naive_page_pixel_size(layout, 1)
+    fx = w1 / 792.0
+    fy = h1 / 612.0
+    py = 6 + h0 + 12
+    y0 = py + 300 * fy
+    y1 = py + 700 * fy
+    centre = (y0 + y1) / 2.0
+    raw = centre - 700 / 2.0
+    max_scroll = max(0, (6 + h0 + 12 + h1 + 6) - 700)
+    assert got == min(qround_half_up(max(0.0, raw)), max_scroll)
+    assert doc_w > 0

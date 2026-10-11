@@ -65,6 +65,47 @@ class PageLayout:
             object.__setattr__(self, "margins", Margins(*self.margins))
         safe_spacing = int(self.spacing)
         object.__setattr__(self, "spacing", safe_spacing)
+        self._build_index()
+
+    def _build_index(self) -> None:
+        """Precompute per-page pixel sizes and document-space offsets (#87).
+
+        The scroll path maps every highlight rect through
+        `page_top_left_doc`, which used to re-walk all preceding pages and
+        re-derive `document_width`/`document_height` per rect —
+        O(pages x captures) per scroll tick (139 ms at 500 captures).
+        The index makes those O(1); values are byte-for-byte what the old
+        loops produced (golden tests in tests/test_pdf_geometry.py)."""
+        scr = self.dpi / 72.0
+        widths: list[int] = []
+        heights: list[int] = []
+        if self.zoom_mode == FIT_TO_WIDTH:
+            available = self.viewport_width - self.margins.left - self.margins.right
+            for w_pt, h_pt in self.page_sizes_pts:
+                base_w = qround_half_up(w_pt * scr)
+                factor = available / base_w if base_w else 1.0
+                widths.append(qround_half_up(base_w * factor))
+                heights.append(qround_half_up(qround_half_up(h_pt * scr) * factor))
+        else:
+            for w_pt, h_pt in self.page_sizes_pts:
+                widths.append(qround_half_up(w_pt * scr * self.zoom))
+                heights.append(qround_half_up(h_pt * scr * self.zoom))
+
+        doc_w = (max(widths) if widths else 0) + self.margins.left + self.margins.right
+        page_y: list[int] = []
+        y = self.margins.top
+        for i, h in enumerate(heights):
+            page_y.append(y)
+            y += h
+            if i < len(heights) - 1:
+                y += self.spacing
+        doc_h = y + self.margins.bottom
+
+        object.__setattr__(self, "_pix_w", widths)
+        object.__setattr__(self, "_pix_h", heights)
+        object.__setattr__(self, "_page_y", page_y)
+        object.__setattr__(self, "_doc_w", doc_w)
+        object.__setattr__(self, "_doc_h", doc_h)
 
     @property
     def screen_resolution(self) -> float:
@@ -72,46 +113,22 @@ class PageLayout:
 
     def page_pixel_size(self, page_index: int) -> Size:
         """Rendered page size in pixels, rounded exactly like Qt."""
-        w_pt, h_pt = self.page_sizes_pts[page_index]
-        scr = self.screen_resolution
-        if self.zoom_mode == FIT_TO_WIDTH:
-            base_w = qround_half_up(w_pt * scr)
-            available = self.viewport_width - self.margins.left - self.margins.right
-            factor = available / base_w if base_w else 1.0
-            return (
-                qround_half_up(base_w * factor),
-                qround_half_up(qround_half_up(h_pt * scr) * factor),
-            )
-        # CUSTOM: points * screenResolution * zoomFactor, .toSize()
-        return (
-            qround_half_up(w_pt * scr * self.zoom),
-            qround_half_up(h_pt * scr * self.zoom),
-        )
+        return (self._pix_w[page_index], self._pix_h[page_index])
 
     def max_page_width_px(self) -> int:
-        return max(w for w, _ in (self.page_pixel_size(i) for i in range(len(self.page_sizes_pts))))
+        return max(self._pix_w) if self._pix_w else 0
 
     def document_width(self) -> int:
-        return self.max_page_width_px() + self.margins.left + self.margins.right
+        return self._doc_w
 
     def document_height(self) -> int:
-        total = self.margins.top
-        for i in range(len(self.page_sizes_pts)):
-            _, h = self.page_pixel_size(i)
-            total += h
-            if i < len(self.page_sizes_pts) - 1:
-                total += self.spacing
-        return total + self.margins.bottom
+        return self._doc_h
 
     def page_top_left_doc(self, page_index: int) -> Point:
         """Top-left of a page in document space (ints, mirrors Qt)."""
-        w, _ = self.page_pixel_size(page_index)
-        page_x = (max(self.document_width(), self.viewport_width) - w) // 2
-        page_y = self.margins.top
-        for i in range(page_index):
-            _, h = self.page_pixel_size(i)
-            page_y += h + self.spacing
-        return (page_x, page_y)
+        w = self._pix_w[page_index]
+        page_x = (max(self._doc_w, self.viewport_width) - w) // 2
+        return (page_x, self._page_y[page_index])
 
     def page_rect_doc(self, page_index: int) -> Rect:
         x, y = self.page_top_left_doc(page_index)

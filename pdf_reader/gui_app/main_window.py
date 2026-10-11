@@ -14,6 +14,7 @@ from views.pdf_reader_view import PDFReaderView
 from views.extracts_view import ExtractsView
 from views.flashcards_view import FlashcardsView
 from services.extract_store import init_schema, resolve_doc_id
+from services.perf_log import span as perf_span
 
 
 # Sidebar button states (#55): one active (blue), the rest idle.
@@ -95,8 +96,11 @@ class MainWindow(QMainWindow):
         # Connect signals
         self.library_view.pdf_selected.connect(self.open_pdf)
         self.pdf_view.back_requested.connect(self.go_back_from_reader)
+        # Exactly one persistence path for progress (#87): this handler
+        # forwards to library_view.update_progress. A second direct connect
+        # to update_progress used to run every write twice (the reader also
+        # wrote directly before #87 — three writes per page change).
         self.pdf_view.progress_changed.connect(self.on_progress_changed)
-        self.pdf_view.progress_changed.connect( self.library_view.update_progress)
         self.extracts_view.jump_requested.connect(self.on_extract_jump)
         self.flashcards_view.source_jump_requested.connect(
             self.on_flashcard_source
@@ -226,22 +230,24 @@ class MainWindow(QMainWindow):
 
     def show_library(self):
         """Show library view"""
-        self.stacked_widget.setCurrentWidget(self.library_view)
-        self.library_view.load_library()
-        self.library_view.setFocus()
-        self._set_active_sidebar(self.library_btn)
+        with perf_span("main.show_library"):
+            self.stacked_widget.setCurrentWidget(self.library_view)
+            self.library_view.load_library()
+            self.library_view.setFocus()
+            self._set_active_sidebar(self.library_btn)
 
     def show_pdf_view(self):
         """Show a PDF view"""
-        # Arm the Back target: remember which view we are leaving, but
-        # never overwrite an existing arm with the reader itself
-        # (re-showing the reader keeps the original origin).
-        if self.stacked_widget.currentWidget() is not self.pdf_view:
-            self._reader_return_view = self.stacked_widget.currentWidget()
-        self.stacked_widget.setCurrentWidget(self.pdf_view)
-        self.pdf_view.reload_extract_captures()
-        self.pdf_view.setFocus()
-        self._set_active_sidebar(self.pdf_reader_btn)
+        with perf_span("main.show_pdf_view"):
+            # Arm the Back target: remember which view we are leaving, but
+            # never overwrite an existing arm with the reader itself
+            # (re-showing the reader keeps the original origin).
+            if self.stacked_widget.currentWidget() is not self.pdf_view:
+                self._reader_return_view = self.stacked_widget.currentWidget()
+            self.stacked_widget.setCurrentWidget(self.pdf_view)
+            self.pdf_view.reload_extract_captures()
+            self.pdf_view.setFocus()
+            self._set_active_sidebar(self.pdf_reader_btn)
 
     def show_extracts(self):
         """Show the Extracts View and refresh its contents"""
@@ -277,9 +283,10 @@ class MainWindow(QMainWindow):
     
     def open_pdf(self, pdf_path: str):
         """Open PDF in reader"""
-        self.current_pdf_path = pdf_path
-        self.pdf_view.load_pdf(pdf_path)
-        self.show_pdf_view()
+        with perf_span("main.open_pdf"):
+            self.current_pdf_path = pdf_path
+            self.pdf_view.load_pdf(pdf_path)
+            self.show_pdf_view()
 
     def on_flashcard_source(self, extract_id: int, doc_id: int):
         """(#62) Flashcards' Source click → the source Extract in the
@@ -320,10 +327,11 @@ class MainWindow(QMainWindow):
     def go_back_from_reader(self):
         """Back from the reader: to the Extracts View when the reader was
         entered via a jump from there, to the Library otherwise."""
-        if self._reader_return_view is self.extracts_view:
-            self.show_extracts()
-        else:
-            self.show_library()
+        with perf_span("main.go_back_from_reader"):
+            if self._reader_return_view is self.extracts_view:
+                self.show_extracts()
+            else:
+                self.show_library()
     
     def on_progress_changed(self, pdf_path: str, page: int):
         """Update progress in library"""
