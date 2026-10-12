@@ -24,11 +24,11 @@ This project is a study workflow: select, extract, review — in one place, keyb
 
 ## Evaluation
 
-Not applicable yet. This is a desktop GUI application; the primary "performance" question is whether the extract flow feels fast enough to use while reading, which we will evaluate by usage rather than offline metrics. To be added after the extract feature ships.
+Shipped as the snappiness round (#87–#94, PRs #90–#96): scroll, open, Back and reopen were each diagnosed, fixed and measured with an opt-in timing log (`PDFR_DEBUG_PERF=1` or a `perf.enabled` marker file → console + `pdf_reader/gui_app/perf.log`, including the perceived-latency line `back: click -> library first paint`). Highlights on the dev machine: cold open 756 → ~290 ms, same-file reopen ~400+ → ~5 ms, Back click → first paint ~8–11 ms. Continue to evaluate by feel in real use — with the log on, every Back click records its real latency in `perf.log`.
 
 ## Testing
 
-The seams in `gui_app/services/` and the offscreen-capable Qt views have a pytest suite (~190 tests): extract/capture/flashcard SQL and DB backup against a temp SQLite DB, layout math, editor-selection snapshots, the FSRS scheduler, the review-session loop, card-list/due-filter behavior, the Extracts-view jump landing, library-list UX, tree/flashcard label helpers, and reader search keys. CI (`.github/workflows/tests.yml`) runs the whole suite on every push to `master` and every PR (ubuntu-latest, Python 3.12, `QT_QPA_PLATFORM=offscreen`, #81).
+The seams in `gui_app/services/` and the offscreen-capable Qt views have a pytest suite (~217 tests): extract/capture/flashcard SQL and DB backup against a temp SQLite DB, layout math, editor-selection snapshots, the FSRS scheduler, the review-session loop, card-list/due-filter behavior, the Extracts-view jump landing, library-list UX (checkbox removal, backup, Back rebuild-skip, row-click no-op), tree/flashcard label helpers, reader search keys, and the reader's open/reopen seams (extract load once, fast-reopen identity). CI (`.github/workflows/tests.yml`) runs the whole suite on every push to `master` and every PR (ubuntu-latest, Python 3.12, `QT_QPA_PLATFORM=offscreen`, #81).
 
 ```powershell
 cd pdf_reader/gui_app

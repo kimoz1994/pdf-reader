@@ -192,6 +192,20 @@ Nothing is due? The Review button is **disabled (0)** and an orange **"No cards 
 
 ---
 
+## Reporting slowness (perf log)
+
+If anything ever feels slow (opening a PDF, Back, scrolling), turn on the timing log:
+
+1. Create an empty file called `perf.enabled` in `pdf_reader\gui_app\` (or set `$env:PDFR_DEBUG_PERF="1"` before launching).
+2. Start the app with `run.ps1` — it prints `[perf] logging ON → console + …\perf.log`.
+3. Do the slow thing, then close the app.
+4. Send the file `pdf_reader\gui_app\perf.log`. Each line is one timing, for example:
+   `back: click -> library first paint: 8.45 ms` — that is the full Back journey: click, database update, view switch, and the first frame you actually see.
+
+Delete `perf.enabled` to switch logging off again.
+
+---
+
 ## Not available yet (honest list)
 
 No feature is currently queued — everything designed is in the app today. The one tracked follow-up is **standalone packaging** (an installer so you can run the app without a Python environment).
