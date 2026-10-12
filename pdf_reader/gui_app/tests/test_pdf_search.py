@@ -260,3 +260,54 @@ def test_help_dialog_documents_real_search_flow(app):
 
     slash = next(row for row in rows if row[0] == "/")
     assert "search" in slash[2].lower()
+
+
+# ------------------------------------------------------------
+# Clickable Zoom Fit (#105) and go-to-page (#106)
+# ------------------------------------------------------------
+
+
+def test_zoom_fit_button_restores_fit_width(view, app):
+    """(#105 AC) Zooming in then clicking Fit returns to FitToWidth."""
+    from PyQt6.QtPdfWidgets import QPdfView
+
+    view.zoom_in()
+    assert view.pdf_view.zoomMode() == QPdfView.ZoomMode.Custom
+
+    view.zoom_fit_btn.click()
+
+    assert view.pdf_view.zoomMode() == QPdfView.ZoomMode.FitToWidth
+    assert view.zoom_fit_btn.text() == "Zoom: Fit"
+
+
+def test_zoom_in_label_shows_percentage(view, app):
+    """(#105) The Fit button's label reflects the custom zoom level."""
+    view.zoom_in()
+    assert "%" in view.zoom_fit_btn.text()
+
+
+def test_goto_page_input_jumps_and_clamps(view, app):
+    """(#106 AC) Typing a page number + Enter jumps; out-of-range values
+    clamp to the document; invalid text restores the current page."""
+    assert view.doc.pageCount() == 3
+
+    view.page_input.setText("3")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.last_visible_page == 2
+    assert view.page_input.text() == "3"
+
+    view.page_input.setText("99")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.last_visible_page == 2, "clamped to the last page"
+
+    view.page_input.setText("0")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.last_visible_page == 0, "clamped to the first page"
+
+    view.page_input.setText("abc")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.page_input.text() in ("1", "3"), "invalid input restores a page"
