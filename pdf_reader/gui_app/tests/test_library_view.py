@@ -310,3 +310,107 @@ def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
 
     assert rebuilds == [1]
     assert view.needs_rebuild() is False  # load_library cleared the flag
+
+
+# ------------------------------------------------------------
+# Export (#112)
+# ------------------------------------------------------------
+
+
+def test_export_csv_writes_anki_file(view, tmp_path, monkeypatch):
+    """(#112 AC) The CSV button asks where, writes question/answer/
+    source/due rows, and reports the path."""
+    from services.extract_store import create_flashcard, init_schema
+
+    init_schema(view.conn)
+    create_flashcard(view.conn, "What is X?", "X is a thing")
+    out = tmp_path / "cards.csv"
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "CSV files (*.csv)"),
+    )
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.export_csv_btn.click()
+
+    text = out.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "Question,Answer,Source,Due"
+    assert "What is X?," in text
+    assert infos and str(out) in infos[0][2]
+
+
+def test_export_md_writes_markdown(view, tmp_path, monkeypatch):
+    """(#112 AC) The MD button writes one file with document + extract
+    headings."""
+    from services.extract_store import Capture, commit_working_set, init_schema
+
+    init_schema(view.conn)
+    seed(view, tmp_path / "a.pdf")
+    doc_id = view.cursor.execute(
+        "SELECT id FROM pdfs WHERE path = ?", (str(tmp_path / "a.pdf"),)
+    ).fetchone()[0]
+    commit_working_set(
+        view.conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "hello export")]
+    )
+    out = tmp_path / "notes.md"
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "Markdown files (*.md)"),
+    )
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.export_md_btn.click()
+
+    text = out.read_text(encoding="utf-8")
+    assert "# a.pdf" in text
+    assert "hello export" in text
+    assert infos and str(out) in infos[0][2]
+
+
+def test_export_csv_cancel_writes_nothing(view, tmp_path, monkeypatch):
+    """(#112) Cancelling the save dialog leaves the filesystem alone."""
+    from services.extract_store import create_flashcard, init_schema
+
+    init_schema(view.conn)
+    create_flashcard(view.conn, "Q?", "A")
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: ("", ""),
+    )
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information", lambda *a: None
+    )
+
+    view.export_csv_btn.click()  # must not raise, must not write
+
+    assert not list(tmp_path.glob("*.csv"))
+
+
+def test_export_csv_empty_library_informs(view, monkeypatch):
+    """(#112) No cards → info dialog, no save prompt."""
+    from services.extract_store import init_schema
+
+    init_schema(view.conn)
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+    prompts = []
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: prompts.append(1) or ("", ""),
+    )
+
+    view.export_csv_btn.click()
+
+    assert infos and "no flashcards" in infos[0][2].lower()
+    assert prompts == []

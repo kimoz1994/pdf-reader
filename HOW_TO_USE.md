@@ -158,6 +158,8 @@ Everything — your library, your read position, your blue extracts — lives in
 | Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
 | Library | Remove the ticked PDFs | **🗑️ Remove Selected** (confirm) or `Delete` |
 | Library | Back up your study data | **💾 Backup** — saves a copy of `library.db` to `backups/` and shows you where |
+| Library | Export flashcards for Anki | **📤 CSV** — pick a location, get `Question,Answer,Source,Due` rows (commas/newlines in answers are quoted correctly) |
+| Library | Export your extracts as notes | **📤 MD** — one Markdown file: a heading per document, a sub-heading per extract, images marked `[image]` |
 
 ---
 
