@@ -310,3 +310,57 @@ def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
 
     assert rebuilds == [1]
     assert view.needs_rebuild() is False  # load_library cleared the flag
+
+
+# ------------------------------------------------------------
+# Zoom memory (#114)
+# ------------------------------------------------------------
+
+
+def test_init_schema_adds_zoom_columns(tmp_path, app):
+    """(#114) An older pdfs table without zoom columns is migrated in
+    place on init."""
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE pdfs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            total_pages INTEGER DEFAULT 0,
+            current_page INTEGER DEFAULT 1,
+            last_opened TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO pdfs (path, name) VALUES (?, ?)", ("C:/a.pdf", "a.pdf")
+    )
+    conn.commit()
+    conn.close()
+
+    v = LibraryView(db_path=db)
+    cols = {r[1] for r in v.cursor.execute("PRAGMA table_info(pdfs)")}
+    assert "zoom_mode" in cols
+    assert "zoom_factor" in cols
+    v.conn.close()
+
+
+def test_update_zoom_persists_per_document(view, tmp_path):
+    """(#114 AC) update_zoom stores mode + level for one path only."""
+    seed(view, tmp_path / "a.pdf")
+    seed(view, tmp_path / "b.pdf")
+
+    view.update_zoom(str(tmp_path / "a.pdf"), "custom", 1.5)
+
+    row = view.cursor.execute(
+        "SELECT zoom_mode, zoom_factor FROM pdfs WHERE path = ?",
+        (str(tmp_path / "a.pdf"),),
+    ).fetchone()
+    assert row == ("custom", 1.5)
+    other = view.cursor.execute(
+        "SELECT zoom_mode FROM pdfs WHERE path = ?",
+        (str(tmp_path / "b.pdf"),),
+    ).fetchone()
+    assert other[0] in (None, "fit")

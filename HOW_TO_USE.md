@@ -158,6 +158,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
 | Library | Remove the ticked PDFs | **🗑️ Remove Selected** (confirm) or `Delete` |
 | Library | Back up your study data | **💾 Backup** — saves a copy of `library.db` to `backups/` and shows you where |
+| Reader | Remember zoom per PDF | zoom in/out once — that PDF reopens at the same zoom; a first open starts at **Fit** |
 
 ---
 
