@@ -98,6 +98,7 @@ class PDFItemWidget(QWidget):
         page_label = QLabel(f"Page {current_page} / {total_pages}")
         page_label.setStyleSheet("color: #3498db; font-size: 14px; font-weight: bold;")
         page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_label = page_label  # kept for in-place refresh (#89)
         progress_layout.addWidget(page_label)
 
         # Progress bar
@@ -120,6 +121,7 @@ class PDFItemWidget(QWidget):
         """)
         progress_bar.setFixedHeight(25)
         progress_bar.setFixedWidth(150)
+        self.progress_bar = progress_bar  # kept for in-place refresh (#89)
         progress_layout.addWidget(progress_bar)
 
         progress_frame.setLayout(progress_layout)
@@ -127,6 +129,14 @@ class PDFItemWidget(QWidget):
 
         self.setLayout(layout)
         self.setFixedHeight(80)  # Fixed height prevents truncation
+
+    def set_progress(self, current_page, total_pages):
+        """Refresh this row's page text and bar in place (#89) — Back from
+        the reader must not rebuild every row just to move one number."""
+        self.page_label.setText(f"Page {current_page} / {total_pages}")
+        pct = (current_page / total_pages) * 100 if total_pages > 0 else 0
+        self.progress_bar.setValue(int(pct))
+        self.progress_bar.setFormat(f"{pct:.1f}%")
 
 
 class LibraryView(QWidget):
@@ -148,6 +158,9 @@ class LibraryView(QWidget):
         self.init_database()
         
         self.selected_pdfs = set()  # ticked rows, by path (#72)
+        # Rows need (re)building until the first load finishes (#89):
+        # Back skips load_library while this stays False.
+        self._structural_dirty = True
         
         self.setup_ui()
         self.load_library()
@@ -322,9 +335,17 @@ class LibraryView(QWidget):
         self.setLayout(layout)
     
     def load_library(self):
-        """Load PDFs from database"""
+        """Rebuild the whole row list from the database."""
         with perf_span("library.load_library"):
             self._rebuild_library_list()
+            self._structural_dirty = False
+
+    def needs_rebuild(self) -> bool:
+        """True while the visible rows don't match the DB's PDF set (#89).
+        Adds/removes rebuild through load_library and clear this; progress
+        never sets it (update_progress lands in place), so Back from the
+        reader skips the full rebuild."""
+        return self._structural_dirty
 
     def _rebuild_library_list(self):
         self.pdf_list.clear()
@@ -533,7 +554,8 @@ class LibraryView(QWidget):
         )
 
     def update_progress(self, pdf_path: str, current_page: int):
-        """Update progress for a PDF"""
+        """Persist progress and refresh the row in place (#89): one label
+        update instead of tearing down every row on the next Back."""
         with perf_span("library.update_progress"):
             try:
                 self.cursor.execute("""
@@ -544,6 +566,20 @@ class LibraryView(QWidget):
                 self.conn.commit()
             except Exception as e:
                 print(f"Error updating progress: {e}")
+            self._update_row_progress(pdf_path, current_page)
+
+    def _update_row_progress(self, pdf_path: str, current_page: int):
+        """Find the row for `pdf_path` and sync its widget + item data —
+        no list rebuild, no file re-stat, no selection wipe."""
+        for i in range(self.pdf_list.count()):
+            item = self.pdf_list.item(i)
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if data and data.get("path") == pdf_path:
+                data["current_page"] = current_page  # shared dict, in place
+                self._row_widget(i).set_progress(
+                    current_page, data.get("total_pages") or 0
+                )
+                return
     
     def closeEvent(self, event):
         self.conn.close()
