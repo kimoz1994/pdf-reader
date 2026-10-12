@@ -143,6 +143,67 @@ def test_source_jump_handler_navigates_via_existing_path(app):
 
 
 # ------------------------------------------------------------
+# Delete confirm mentions flashcard impact (#108)
+# ------------------------------------------------------------
+
+
+def _extract_row(view):
+    """The first Extract row in the tree (child of the first Document)."""
+    doc_item = view.tree.topLevelItem(0)
+    return doc_item.child(0)
+
+
+def test_delete_confirm_mentions_flashcard_count(app, conn, monkeypatch):
+    """(#108 AC) When N flashcards point at the Extract, the confirm
+    text says so — the user learns the cards lose their source link."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from services.extract_store import create_flashcard
+
+    doc_id, eid = seed_extract(conn)
+    create_flashcard(conn, "Q1", "A1", extract_id=eid, doc_id=doc_id)
+    create_flashcard(conn, "Q2", "A2", extract_id=eid, doc_id=doc_id)
+    view = make_view(conn, monkeypatch)
+    view.tree.setCurrentItem(_extract_row(view))
+
+    seen = []
+
+    def fake_question(parent, title, text, *a, **k):
+        seen.append(text)
+        return QMessageBox.StandardButton.No  # cancel: we only inspect the text
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+
+    view.delete_selected()
+
+    assert seen, "no confirm dialog"
+    assert "2 flashcards" in seen[0]
+    assert "lose their source link" in seen[0]
+
+
+def test_delete_confirm_omits_flashcard_line_when_none(app, conn, monkeypatch):
+    """(#108) No cards on the Extract: the confirm text has no flashcard
+    warning line."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    doc_id, eid = seed_extract(conn)
+    view = make_view(conn, monkeypatch)
+    view.tree.setCurrentItem(_extract_row(view))
+
+    seen = []
+
+    def fake_question(parent, title, text, *a, **k):
+        seen.append(text)
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+
+    view.delete_selected()
+
+    assert seen and "flashcard" not in seen[0]
+
+
+# ------------------------------------------------------------
 # Back auto-save failure surfaces instead of silent loss (#101)
 # ------------------------------------------------------------
 

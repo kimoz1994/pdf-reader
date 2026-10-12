@@ -73,7 +73,7 @@ Search details: nothing runs while you type — press `Enter` to search, `Enter`
 
 **Capture an image:** just **click** it — the detected image goes yellow, then `e` works the same way.
 
-**Changed your mind?** Press **`Esc`** — the yellow pending marks disappear without saving anything.
+**Changed your mind?** Press **`Esc`** — the yellow pending marks disappear without saving anything. (Going **◀ Back** or closing the app with pending marks asks first, so you don't lose them by accident.)
 
 **Colors, one last time:**
 

@@ -1534,6 +1534,9 @@ class PDFReaderView(QWidget):
     # ------------------------------------------------------------
 
     def closeEvent(self, event):
+        if self.working_set and not self._confirm_discard_working_set():
+            event.ignore()
+            return
         self._reset_extract_state()
         self._loading_document = True
         # No setDocument(None) here either (see load_pdf): closing the doc
@@ -1547,7 +1550,23 @@ class PDFReaderView(QWidget):
         self._loading_document = False
         event.accept()
 
+    def _confirm_discard_working_set(self) -> bool:
+        """Ask before dropping pending yellow selections on Back / close
+        (#107). Esc stays an immediate discard — that is an explicit act."""
+        n = len(self.working_set)
+        reply = QMessageBox.question(
+            self,
+            "Unsaved selections",
+            f"Discard {n} pending selection{'s' if n != 1 else ''}?\n\n"
+            "These highlights have not been saved as an Extract yet.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     def go_back(self):
+        if self.working_set and not self._confirm_discard_working_set():
+            return
         with perf_span("reader.go_back"):
             # Click instant; LibraryView.paintEvent logs the perceived
             # latency when the library's first paint lands.
