@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QPushButton,
+    QLineEdit,
     QTextEdit,
     QDialog,
     QLineEdit,
@@ -52,6 +53,7 @@ from services.extract_store import (
     list_due_cards,
     list_flashcards,
     record_review,
+    study_stats,
     update_flashcard_question,
 )
 from services.fsrs_scheduler import (
@@ -410,6 +412,13 @@ class FlashcardsView(QWidget):
         header.setStyleSheet("font-size: 28px; font-weight: bold; color: #3498db;")
         header_row.addWidget(header)
         header_row.addStretch()
+        # Live search (#110): narrows the list by question / source name.
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("🔍 Search cards…")
+        self.filter_input.setClearButtonEnabled(True)
+        self.filter_input.setMaximumWidth(240)
+        self.filter_input.textChanged.connect(self._on_filter_changed)
+        header_row.addWidget(self.filter_input)
         # Due-today filter (#61): unchecked = All, checked = exactly
         # the Review session's set. The button's check state is the
         # single source of truth — refresh() reads it, no shadow flag.
@@ -461,6 +470,14 @@ class FlashcardsView(QWidget):
         header_row.addWidget(self.review_btn)
         layout.addLayout(header_row)
 
+        # Study stats (#111): a quiet strip under the header — reviews
+        # today, total cards, due tomorrow / next 7 days, and the
+        # consecutive-day streak. Refreshed with the list.
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet("color: #95a5a6; font-size: 13px;")
+        self.stats_label.hide()
+        layout.addWidget(self.stats_label)
+
         # Visible "nothing to study" state (#59 AC) — a disabled
         # button's tooltip alone is too easy to miss.
         self.due_hint = QLabel()
@@ -494,6 +511,7 @@ class FlashcardsView(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
+        self.table.setSortingEnabled(True)  # #110: click a header to sort
         self.table.setStyleSheet(
             """
             QTableWidget {
@@ -551,10 +569,36 @@ class FlashcardsView(QWidget):
             return []
         return list_due_cards(conn, end_of_local_day_utc())
 
+    def _refresh_stats(self, conn):
+        """(#111) Fill the stats strip from `study_stats`; hide it when
+        there's nothing to report (empty library / no conn)."""
+        if conn is None:
+            self.stats_label.hide()
+            return
+        s = study_stats(conn)
+        if s["total_cards"] == 0 and s["reviews_today"] == 0 and s["streak"] == 0:
+            self.stats_label.hide()
+            return
+        parts = [
+            f"📚 {s['total_cards']} cards",
+            f"✅ {s['reviews_today']} reviewed today",
+            f"📅 {s['due_tomorrow']} due tomorrow",
+            f"🗓 {s['due_next_7_days']} due in 7 days",
+        ]
+        if s["streak"] > 0:
+            parts.append(f"🔥 {s['streak']}-day streak")
+        self.stats_label.setText("  ·  ".join(parts))
+        self.stats_label.show()
+
     def _toggle_due_today(self, _checked):
         """(#61) The filter button flipped — reload the list. The
         Review button count and the empty-day hint are filter-
         independent and get recomputed by refresh() anyway."""
+        self.refresh()
+
+    def _on_filter_changed(self, _text):
+        """(#110) Search box changed — re-run refresh so the row set
+        tracks the text (and still respects the Due-today toggle)."""
         self.refresh()
 
     def _start_review(self):
@@ -584,9 +628,15 @@ class FlashcardsView(QWidget):
         self.review_btn.setToolTip(
             "No cards due today" if not due else ""
         )
+        self._refresh_stats(conn)
 
         if not cards:
             self._hide_table()
+            self.empty_label.setText(
+                "No flashcards yet.\n\n"
+                "Select text in the Extract Editor and choose\n"
+                "“🃏 Make flashcard…” to create one."
+            )
             self.empty_label.show()
             self.due_hint.hide()
             return
@@ -602,10 +652,33 @@ class FlashcardsView(QWidget):
         # day hides the table (the hint already says why) instead of
         # showing a blank box.
         visible = due if self.due_toggle.isChecked() else cards
+        # #110: the search box narrows further — case-insensitive
+        # substring over question + source label (which includes the
+        # source document name, so both filters compose).
+        needle = self.filter_input.text().strip().lower()
+        if needle:
+            visible = [
+                c
+                for c in visible
+                if needle in (c.question or "").lower()
+                or needle in _source_label(c).lower()
+            ]
         if not visible:
+            if needle and cards:
+                # Search with zero hits: say so, don't show an empty
+                # box (and don't claim "no cards" — they exist).
+                self._hide_table()
+                self.empty_label.setText(f"No cards match “{needle}”")
+                self.empty_label.show()
+                self.due_hint.hide()
+                return
             self._hide_table()
             return
+        self.empty_label.hide()
         self.table.show()
+        # Sort while filling makes Qt re-sort on every setItem — turn
+        # it off for the rebuild, on again after (#110).
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(visible))
         for row, card in enumerate(visible):
             items = [
@@ -633,6 +706,7 @@ class FlashcardsView(QWidget):
                             "Click to open the source Extract"
                         )
                 self.table.setItem(row, col, item)
+        self.table.setSortingEnabled(True)
         self._sync_row_actions()
 
     def _on_cell_clicked(self, row, column):

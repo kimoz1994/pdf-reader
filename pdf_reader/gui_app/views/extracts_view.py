@@ -50,6 +50,7 @@ from PyQt6.QtGui import (
 from services.extract_store import (
     IMG_PLACEHOLDER,
     create_flashcard,
+    count_flashcards_for_extract,
     delete_extract,
     display_title,
     list_docs_with_extracts,
@@ -1173,9 +1174,17 @@ class ExtractsView(QWidget):
 
     def _close_editor(self):
         """Back: auto-save pending edits, hide the editor, restore the tree
-        exactly as it was."""
+        exactly as it was. A failed auto-save warns and keeps the editor
+        open — the edit is not silently lost (#101)."""
         if self._editor_dirty:
-            self._save_editor()
+            if not self._save_editor():
+                QMessageBox.critical(
+                    self,
+                    "Save failed",
+                    "Could not save your edits to the database.\n"
+                    "Stay in the editor and try 💾 Save again.",
+                )
+                return
         self.editor_page.hide()
         self.header_label.show()
         self.refresh_btn.show()
@@ -1243,10 +1252,20 @@ class ExtractsView(QWidget):
         conn = self._db_conn()
         if conn is None:
             return
+        n_cards = count_flashcards_for_extract(conn, extract_id)
+        msg = (
+            f"Delete Extract #{extract_id} and all of its captures?\n\n"
+            "This cannot be undone."
+        )
+        if n_cards:
+            msg += (
+                f"\n\n{n_cards} flashcard{'s' if n_cards != 1 else ''} "
+                "point at this Extract — they stay but lose their source link."
+            )
         reply = QMessageBox.question(
             self,
             "Delete Extract",
-            f"Delete Extract #{extract_id} and all of its captures?\n\nThis cannot be undone.",
+            msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

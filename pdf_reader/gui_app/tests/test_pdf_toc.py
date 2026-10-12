@@ -96,7 +96,8 @@ def test_toc_click_jumps_to_page(view, app, toc_pdf):
     app.processEvents()
 
     assert view.last_visible_page == 2
-    assert view.page_label.text().endswith("/3")
+    assert view.page_input.text() == "3"
+    assert view.page_total_label.text().strip() == "/ 3"
 
 
 def test_no_outline_hides_panel(view, app, flat_pdf):

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 import sqlite3
 
@@ -11,6 +11,7 @@ from services.extract_store import (
     backup_database,
     capture_overlaps_extract,
     commit_working_set,
+    count_flashcards_for_extract,
     create_flashcard,
     delete_extract,
     delete_flashcard,
@@ -27,8 +28,10 @@ from services.extract_store import (
     preview_for_extract,
     record_review,
     resolve_doc_id,
+    restore_database,
     save_extract_text,
     set_capture_display_w,
+    study_stats,
     update_flashcard_question,
 )
 
@@ -1435,6 +1438,24 @@ def test_create_flashcard_allows_null_source(conn):
     assert cards[0].source_name is None
 
 
+def test_count_flashcards_for_extract(conn):
+    """(#108) The delete-confirm seam counts cards pointing at an Extract."""
+    doc_id = seed_pdf(conn)
+    a = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    b = commit_working_set(
+        conn, doc_id, [Capture(1, (0, 0, 1, 1), "text", "y")]
+    )
+    create_flashcard(conn, "Q1", "A1", extract_id=a, doc_id=doc_id)
+    create_flashcard(conn, "Q2", "A2", extract_id=a, doc_id=doc_id)
+    create_flashcard(conn, "Q3", "A3", extract_id=b, doc_id=doc_id)
+
+    assert count_flashcards_for_extract(conn, a) == 2
+    assert count_flashcards_for_extract(conn, b) == 1
+    assert count_flashcards_for_extract(conn, 9999) == 0
+
+
 def test_create_flashcard_persists_image_blobs_in_order(conn):
     """(#56) Image bytes are copied into card-owned storage, one row per
     blob, indexed in snapshot order — not references to the source."""
@@ -1691,3 +1712,136 @@ def test_backup_database_prunes_to_keep(conn, tmp_path):
     # file — the oldest was pruned.
     assert "library-20200103-000000.db" in remaining
     assert "library-20200101-000000.db" not in remaining
+
+
+def test_restore_database_replaces_content_in_place(conn, tmp_path):
+    """(#109 AC) Restore copies the snapshot's content into the live
+    connection — same connection object keeps working, sees the old data."""
+    seed_pdf(conn)
+    snapshot = backup_database(conn, tmp_path / "backups")
+
+    # Trash the live library after the snapshot was taken.
+    conn.execute("DELETE FROM pdfs")
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 0
+
+    restore_database(conn, snapshot)
+
+    assert conn.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 1
+
+
+def test_restore_database_missing_snapshot_raises(conn, tmp_path):
+    """(#109) A missing file is a clear error, not a silent no-op."""
+    with pytest.raises(FileNotFoundError):
+        restore_database(conn, tmp_path / "nope.db")
+
+
+# ------------------------------------------------------------
+# Study stats (#111)
+# ------------------------------------------------------------
+
+
+def _log_review(conn, card_id, stamp_utc):
+    """Insert a review_log row with an explicit UTC timestamp (shape
+    matches SQLite CURRENT_TIMESTAMP)."""
+    conn.execute(
+        "INSERT INTO review_logs (flashcard_id, rating, reviewed_at) VALUES (?, 3, ?)",
+        (card_id, stamp_utc),
+    )
+    conn.commit()
+
+
+def test_study_stats_empty_library(conn):
+    """(#111) An empty library reports zeros — no crash, streak 0."""
+    stats = study_stats(conn)
+
+    assert stats == {
+        "reviews_today": 0,
+        "total_cards": 0,
+        "due_tomorrow": 0,
+        "due_next_7_days": 0,
+        "streak": 0,
+    }
+
+
+def test_study_stats_counts_and_buckets(conn):
+    """(#111 AC) reviews_today / total_cards / due_tomorrow /
+    due_next_7_days come from the right tables and windows."""
+    from datetime import date
+    from services.fsrs_scheduler import end_of_local_day_utc
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    local_now = now.astimezone()
+    end_today = end_of_local_day_utc(local_now)
+    end_tomorrow = end_of_local_day_utc(
+        datetime.combine(local_now.date() + timedelta(days=1), time.max,
+                         tzinfo=local_now.tzinfo)
+    )
+    end_week = end_of_local_day_utc(
+        datetime.combine(local_now.date() + timedelta(days=7), time.max,
+                         tzinfo=local_now.tzinfo)
+    )
+
+    def _iso(dt):
+        return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    # Two cards due today (not counted in due_tomorrow / next-7-windows).
+    c_today_a = create_flashcard(conn, "Due today A?", "A", due_utc=_iso(end_today))
+    c_today_b = create_flashcard(conn, "Due today B?", "B", due_utc=_iso(end_today))
+    # One due tomorrow.
+    c_tom = create_flashcard(conn, "Due tomorrow?", "T", due_utc=_iso(end_tomorrow))
+    # One due later in the week (after tomorrow, before week end).
+    c_week = create_flashcard(
+        conn, "Due next week?", "W",
+        due_utc=_iso(end_tomorrow + timedelta(days=2)),
+    )
+    # One due in a month (outside the 7-day window).
+    create_flashcard(
+        conn, "Due later?", "L", due_utc=_iso(end_week + timedelta(days=20))
+    )
+
+    # Three reviews today (UTC stamp of "now").
+    today_stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    _log_review(conn, c_today_a, today_stamp)
+    _log_review(conn, c_today_b, today_stamp)
+    _log_review(conn, c_tom, today_stamp)
+    # One review yesterday (breaks into a 2-day streak only if today also has reviews).
+    y_stamp = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _log_review(conn, c_week, y_stamp)
+
+    stats = study_stats(conn, now=local_now)
+
+    assert stats["reviews_today"] == 3
+    assert stats["total_cards"] == 5
+    assert stats["due_tomorrow"] == 1
+    assert stats["due_next_7_days"] == 2  # tomorrow + the in-week card
+    assert stats["streak"] == 2  # yesterday + today
+
+
+def test_study_stats_streak_ends_yesterday(conn):
+    """(#111) No reviews today but one yesterday → streak is 1
+    (the chain is allowed to start yesterday)."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    local_now = now.astimezone()
+    card = create_flashcard(conn, "Q", "A")
+    y_stamp = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    _log_review(conn, card, y_stamp)
+
+    stats = study_stats(conn, now=local_now)
+
+    assert stats["streak"] == 1
+    assert stats["reviews_today"] == 0
+
+
+def test_study_stats_streak_zero_when_gap(conn):
+    """(#111) Reviews two days ago only → streak is 0 (the chain cannot
+    jump a missing day)."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    local_now = now.astimezone()
+    card = create_flashcard(conn, "Q", "A")
+    two_days = (now - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+    _log_review(conn, card, two_days)
+
+    stats = study_stats(conn, now=local_now)
+
+    assert stats["streak"] == 0
