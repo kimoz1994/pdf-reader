@@ -258,6 +258,7 @@ _CAPTURE_SCALE = 2.0
 class PDFReaderView(QWidget):
     back_requested = pyqtSignal()
     progress_changed = pyqtSignal(str, int)
+    zoom_changed = pyqtSignal(str, str, float)  # path, mode, factor (#114)
 
     def __init__(self):
         super().__init__()
@@ -632,8 +633,18 @@ class PDFReaderView(QWidget):
                 self.pdf_view.setDocument(self.doc)
             with perf_span("load_pdf: pageMode+zoomMode"):
                 self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
-                self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-            self.zoom_fit_btn.setText("Zoom: Fit")
+                # #114: restore this document's saved zoom; first open
+                # (NULL / missing columns) stays Fit.
+                saved_mode, saved_factor = self._saved_zoom_for(pdf_path)
+                if saved_mode == "custom" and saved_factor:
+                    self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
+                    self.pdf_view.setZoomFactor(float(saved_factor))
+                    self.zoom_fit_btn.setText(
+                        f"Zoom: {int(float(saved_factor) * 100)}%"
+                    )
+                else:
+                    self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+                    self.zoom_fit_btn.setText("Zoom: Fit")
 
             # Blue extracts load exactly once per open (#88): in
             # show_pdf_view -> reload_extract_captures, not here too.
@@ -662,6 +673,24 @@ class PDFReaderView(QWidget):
         except Exception as e:
             print(f"Error restoring saved page: {e}")
         return 0
+
+    def _saved_zoom_for(self, pdf_path: str):
+        """Saved (mode, factor) from the library DB; (None, None) when
+        unknown — first open stays Fit (#114)."""
+        try:
+            main_window = self.window()
+            if hasattr(main_window, "library_view"):
+                library_view = main_window.library_view
+                library_view.cursor.execute(
+                    "SELECT zoom_mode, zoom_factor FROM pdfs WHERE path = ?",
+                    (pdf_path,),
+                )
+                row = library_view.cursor.fetchone()
+                if row:
+                    return row[0], row[1]
+        except Exception as e:
+            print(f"Error restoring saved zoom: {e}")
+        return None, None
 
     def _jump_to_saved_page(self, saved_page: int, count: int):
         """Jump the navigator to `saved_page` and sync everything that
@@ -1026,6 +1055,7 @@ class PDFReaderView(QWidget):
         self.zoom_fit_btn.setText(
             f"Zoom: {int(new * 100)}%"
         )
+        self._persist_zoom("custom", new)
         self._refresh_highlights()
 
     def zoom_out(self):
@@ -1036,7 +1066,15 @@ class PDFReaderView(QWidget):
         self.zoom_fit_btn.setText(
             f"Zoom: {int(new * 100)}%"
         )
+        self._persist_zoom("custom", new)
         self._refresh_highlights()
+
+    def _persist_zoom(self, mode: str, factor: float):
+        """(#114) Emit the zoom for this document so MainWindow can
+        write it through library_view.update_zoom — same single-path
+        pattern as progress_changed."""
+        if self.current_pdf and not self._loading_document:
+            self.zoom_changed.emit(self.current_pdf, mode, factor)
 
     def zoom_fit(self):
         """Restore FitToWidth (#105) — the way back after +/- zoom."""

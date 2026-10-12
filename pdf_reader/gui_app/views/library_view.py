@@ -181,6 +181,13 @@ class LibraryView(QWidget):
                 last_opened TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # #114: per-document zoom memory. Older DBs get the columns
+        # backfilled with NULL → first open after upgrade stays Fit.
+        cols = {r[1] for r in self.cursor.execute("PRAGMA table_info(pdfs)")}
+        if "zoom_mode" not in cols:
+            self.cursor.execute("ALTER TABLE pdfs ADD COLUMN zoom_mode TEXT")
+        if "zoom_factor" not in cols:
+            self.cursor.execute("ALTER TABLE pdfs ADD COLUMN zoom_factor REAL")
         self.conn.commit()
     
     def setup_ui(self):
@@ -679,6 +686,20 @@ class LibraryView(QWidget):
                 print(f"Error updating progress: {e}")
                 self._toast("Could not save read progress")
             self._update_row_progress(pdf_path, current_page)
+
+    def update_zoom(self, pdf_path: str, zoom_mode: str, zoom_factor: float):
+        """Persist the reader's zoom for one document (#114): 'fit' or
+        'custom' plus the factor (ignored for fit). Reopen restores it;
+        a first open (NULL columns) stays Fit."""
+        try:
+            self.cursor.execute("""
+                UPDATE pdfs
+                SET zoom_mode = ?, zoom_factor = ?
+                WHERE path = ?
+            """, (zoom_mode, zoom_factor, pdf_path))
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error updating zoom: {e}")
 
     def _update_row_progress(self, pdf_path: str, current_page: int):
         """Find the row for `pdf_path` and sync its widget + item data —
