@@ -1,6 +1,6 @@
-"""Library removal UX (#72): per-row checkboxes drive a count-enabled
+﻿"""Library removal UX (#72): per-row checkboxes drive a count-enabled
 Remove button, with select-all and the Del key; rows whose file is gone
-stay listed so they can be removed too. Plus the 💾 Backup button (#83):
+stay listed so they can be removed too. Plus the ≡ƒÆ╛ Backup button (#83):
 one click snapshots library.db into backups/. Plus Back-visit skip (#89):
 progress refreshes a row in place and a clean list never rebuilds.
 Offscreen widget tests over a temp database."""
@@ -59,7 +59,7 @@ def test_rows_list_with_checkboxes_and_remove_disabled(view, tmp_path):
 
 
 def test_missing_file_row_still_listed_marked_and_removable(view, tmp_path, monkeypatch):
-    """#72: a file that moved/deleted must not vanish from the view —
+    """#72: a file that moved/deleted must not vanish from the view ΓÇö
     it is exactly the row you want to remove."""
     seed(view, tmp_path / "gone.pdf", name="gone.pdf")
     view.load_library()
@@ -161,7 +161,7 @@ def test_del_key_removes_checked_rows(view, tmp_path, monkeypatch, app):
     monkeypatch.setattr(view, "_confirm_removal", lambda names: True)
 
     # The shortcut has list scope, so the list must be the focused
-    # widget — show + process events the way a real session would.
+    # widget ΓÇö show + process events the way a real session would.
     view.show()
     app.processEvents()
     view.pdf_list.setFocus()
@@ -178,7 +178,7 @@ def test_del_key_removes_checked_rows(view, tmp_path, monkeypatch, app):
 
 
 def test_backup_button_calls_seam_and_confirms(view, monkeypatch):
-    """(#83 AC) The 💾 Backup button runs the backup seam and shows the
+    """(#83 AC) The ≡ƒÆ╛ Backup button runs the backup seam and shows the
     user where the copy went."""
     fake_path = Path("/backups/library-20261011-120000.db")
     monkeypatch.setattr(view, "_do_backup", lambda: fake_path)
@@ -234,7 +234,7 @@ class _StubStack:
 
 def _bare_main_window(view):
     """Uninitialized MainWindow holding just what show_library touches
-    (#89) — constructing a real one would hit the real library.db."""
+    (#89) ΓÇö constructing a real one would hit the real library.db."""
     win = MainWindow.__new__(MainWindow)
     win.library_view = view
     win.stacked_widget = _StubStack()
@@ -249,7 +249,7 @@ def test_needs_rebuild_false_after_startup(view):
 
 
 def test_update_progress_refreshes_row_in_place(view, tmp_path, monkeypatch):
-    """(#89) Page changes land on the existing row widget — no rebuild,
+    """(#89) Page changes land on the existing row widget ΓÇö no rebuild,
     no wiped checkboxes, DB write intact."""
     seed(view, tmp_path / "a.pdf", total_pages=3, current_page=1)
     seed(view, tmp_path / "b.pdf", total_pages=3, current_page=1)
@@ -435,7 +435,7 @@ def test_restore_cancelled_changes_nothing(view, tmp_path, monkeypatch):
 
 
 def test_restore_with_no_backups_shows_info(view, monkeypatch):
-    """(#109) Empty backups/ → helpful info, no crash."""
+    """(#109) Empty backups/ ΓåÆ helpful info, no crash."""
     infos = []
     monkeypatch.setattr(
         "views.library_view.QMessageBox.information",
@@ -470,7 +470,7 @@ class _FakeWindow:
 
 def test_add_pdf_failure_toasts_instead_of_console_only(view, monkeypatch):
     """(#104 AC) A failed add (bad file, disk error) tells the user via
-    the status bar — not just print()."""
+    the status bar ΓÇö not just print()."""
     import fitz
 
     def boom(*_a, **_k):
@@ -535,7 +535,7 @@ def _make_real_pdf(path, pages=3):
 def test_readd_same_pdf_preserves_id_progress_and_extracts(view, tmp_path):
     """(#99) Re-adding a PDF already in the library must not reset its
     id (which would orphan every extract/flashcard keyed to it) or its
-    read progress — name/page count just refresh from disk."""
+    read progress ΓÇö name/page count just refresh from disk."""
     from services.extract_store import init_schema
 
     pdf = tmp_path / "a.pdf"
@@ -591,3 +591,107 @@ def test_readd_refreshes_name_and_page_count(view, tmp_path):
     ).fetchone()
     assert name == "a.pdf"
     assert pages == 5
+
+
+# ------------------------------------------------------------
+# Export (#112)
+# ------------------------------------------------------------
+
+
+def test_export_csv_writes_anki_file(view, tmp_path, monkeypatch):
+    """(#112 AC) The CSV button asks where, writes question/answer/
+    source/due rows, and reports the path."""
+    from services.extract_store import create_flashcard, init_schema
+
+    init_schema(view.conn)
+    create_flashcard(view.conn, "What is X?", "X is a thing")
+    out = tmp_path / "cards.csv"
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "CSV files (*.csv)"),
+    )
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.export_csv_btn.click()
+
+    text = out.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "Question,Answer,Source,Due"
+    assert "What is X?," in text
+    assert infos and str(out) in infos[0][2]
+
+
+def test_export_md_writes_markdown(view, tmp_path, monkeypatch):
+    """(#112 AC) The MD button writes one file with document + extract
+    headings."""
+    from services.extract_store import Capture, commit_working_set, init_schema
+
+    init_schema(view.conn)
+    seed(view, tmp_path / "a.pdf")
+    doc_id = view.cursor.execute(
+        "SELECT id FROM pdfs WHERE path = ?", (str(tmp_path / "a.pdf"),)
+    ).fetchone()[0]
+    commit_working_set(
+        view.conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "hello export")]
+    )
+    out = tmp_path / "notes.md"
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "Markdown files (*.md)"),
+    )
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.export_md_btn.click()
+
+    text = out.read_text(encoding="utf-8")
+    assert "# a.pdf" in text
+    assert "hello export" in text
+    assert infos and str(out) in infos[0][2]
+
+
+def test_export_csv_cancel_writes_nothing(view, tmp_path, monkeypatch):
+    """(#112) Cancelling the save dialog leaves the filesystem alone."""
+    from services.extract_store import create_flashcard, init_schema
+
+    init_schema(view.conn)
+    create_flashcard(view.conn, "Q?", "A")
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: ("", ""),
+    )
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information", lambda *a: None
+    )
+
+    view.export_csv_btn.click()  # must not raise, must not write
+
+    assert not list(tmp_path.glob("*.csv"))
+
+
+def test_export_csv_empty_library_informs(view, monkeypatch):
+    """(#112) No cards ΓåÆ info dialog, no save prompt."""
+    from services.extract_store import init_schema
+
+    init_schema(view.conn)
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+    prompts = []
+    monkeypatch.setattr(
+        "views.library_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: prompts.append(1) or ("", ""),
+    )
+
+    view.export_csv_btn.click()
+
+    assert infos and "no flashcards" in infos[0][2].lower()
+    assert prompts == []

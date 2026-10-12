@@ -164,6 +164,8 @@ Everything — your library, your read position, your blue extracts — lives in
 | Library | Remove the ticked PDFs | **🗑️ Remove Selected** (confirm) or `Delete` |
 | Library | Back up your study data | **💾 Backup** — saves a copy of `library.db` to `backups/` and shows you where |
 | Library | Load a previous backup | **♻️ Restore** — pick a snapshot from `backups/`, confirm, and the library is replaced |
+| Library | Export flashcards for Anki | **📤 CSV** — pick a location, get `Question,Answer,Source,Due` rows (commas/newlines in answers are quoted correctly) |
+| Library | Export your extracts as notes | **📤 MD** — one Markdown file: a heading per document, a sub-heading per extract, images marked `[image]` |
 | Reader | Remember zoom per PDF | zoom in/out once — that PDF reopens at the same zoom; a first open starts at **Fit** |
 | Anywhere | Jump between views | `Ctrl+1` Library · `Ctrl+2` Extracts · `Ctrl+3` Flashcards (or **View** menu) |
 | Reader | Find / zoom / page from the menu | **Reader** menu: Find `Ctrl+F`, Zoom `Ctrl++`/`Ctrl+-`, Pages `PgUp`/`PgDown` — only while the reader is open |
