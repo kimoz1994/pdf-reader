@@ -212,3 +212,47 @@ def test_open_pdf_shipped_path_loads_extracts_once(view, app, fixture_pdf):
 
     assert win.stacked_widget.shown is view, "reader must be the shown view"
     assert calls == [1], f"expected exactly 1 extract load, got {calls}"
+
+
+def test_reopen_same_pdf_reuses_loaded_document(view, app, fixture_pdf):
+    """(#94 AC) Back -> open the same PDF again takes the fast path:
+    the QPdfDocument object is reused (no re-parse, no setDocument),
+    and progress is still emitted exactly once."""
+    first_doc = view.doc
+    assert first_doc is not None
+
+    progress = []
+    view.progress_changed.connect(lambda p, page: progress.append((p, page)))
+
+    view.load_pdf(fixture_pdf)
+    app.processEvents()
+
+    assert view.doc is first_doc, "reopen must reuse the live document"
+    assert progress == [(fixture_pdf, 1)], (
+        "exactly one progress emission (no library -> saved page 1)"
+    )
+    assert view.last_visible_page == 0
+    assert view.page_label.text() == "Page: 1/2"
+
+
+def test_open_different_pdf_takes_the_full_path(view, app, fixture_pdf, tmp_path):
+    """(#94) A different file (and a switch back) must fully reload:
+    the old document is closed, a new QPdfDocument created."""
+    other = tmp_path / "other.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=595, height=842)
+    doc.save(str(other))
+    doc.close()
+
+    first_doc = view.doc
+    view.load_pdf(str(other))
+    app.processEvents()
+    assert view.doc is not first_doc, "different file must fully reload"
+    assert view.current_pdf == str(other)
+    second_doc = view.doc
+
+    view.load_pdf(fixture_pdf)
+    app.processEvents()
+    assert view.doc is not second_doc, "switching back must also reload"
+    assert view.doc is not first_doc, "a fresh object, not the recycled one"
+    assert view.current_pdf == fixture_pdf
