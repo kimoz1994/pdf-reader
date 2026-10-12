@@ -144,6 +144,8 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
+| Flashcards | Sort the list | click a column header (Question / Source / Created / Next due) |
+| Flashcards | Find a card fast | type in 🔍 **Search cards…** (question + source name, case-insensitive) — ✕ or empty text clears |
 | Flashcards | Edit a card's question | select the row → **✏️ Edit question** (or `F2`, or right-click → ✏️ Edit question…) |
 | Flashcards | Delete a card | select the row → **🗑 Delete** (or `Del`, or right-click → 🗑 Delete) — asks first |
 | Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled (with "No cards due today") when none |
@@ -173,6 +175,8 @@ Turn any passage you selected into a flashcard:
 The answer is copied at that moment — text and image bytes alike — so editing the Extract afterwards never changes the card, and the card still shows its images even if the source document is removed. The dialog's answer preview displays the images inline, not just placeholder boxes. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — and a card whose source PDF was removed keeps that document's name (marked `⚠ removed source`, same as the Extracts tree) instead of hiding the source.
 
 **Fix or remove a card from the list**: select its row and click **✏️ Edit question** (or press `F2`, or right-click the row) to correct a typo — only the question is written, so the card's schedule and next due date do not move; or click **🗑 Delete** (or press `Del`, or right-click) — a confirmation names the card, and confirming removes that card's question, answer, images and review history, **nothing else** (the source Extract stays in your library).
+
+**Sort and search the list (#110)**: click any column header to sort (Question, Source, Created, Next due). Type in **🔍 Search cards…** in the header to narrow the list live — it matches the question **and** the source document name (case-insensitive), and combines with **📅 Due today** (search *within* today's due set). A search with no hits hides the table and says `No cards match “…”`; clearing the box brings every card back.
 
 **Only see what's due today**: click **📅 Due today** in the header — the list then shows exactly the cards a Review session would grade (same rule: overdue, due later today, and brand-new cards; tomorrow's cards stay hidden, sorted soonest-first). Click it again to return to **All**. With nothing due, the table hides and the orange "No cards due today" hint explains why.
 
