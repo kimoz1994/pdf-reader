@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QPushButton,
+    QLineEdit,
     QTextEdit,
     QDialog,
     QLineEdit,
@@ -410,6 +411,13 @@ class FlashcardsView(QWidget):
         header.setStyleSheet("font-size: 28px; font-weight: bold; color: #3498db;")
         header_row.addWidget(header)
         header_row.addStretch()
+        # Live search (#110): narrows the list by question / source name.
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("🔍 Search cards…")
+        self.filter_input.setClearButtonEnabled(True)
+        self.filter_input.setMaximumWidth(240)
+        self.filter_input.textChanged.connect(self._on_filter_changed)
+        header_row.addWidget(self.filter_input)
         # Due-today filter (#61): unchecked = All, checked = exactly
         # the Review session's set. The button's check state is the
         # single source of truth — refresh() reads it, no shadow flag.
@@ -494,6 +502,7 @@ class FlashcardsView(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
+        self.table.setSortingEnabled(True)  # #110: click a header to sort
         self.table.setStyleSheet(
             """
             QTableWidget {
@@ -557,6 +566,11 @@ class FlashcardsView(QWidget):
         independent and get recomputed by refresh() anyway."""
         self.refresh()
 
+    def _on_filter_changed(self, _text):
+        """(#110) Search box changed — re-run refresh so the row set
+        tracks the text (and still respects the Due-today toggle)."""
+        self.refresh()
+
     def _start_review(self):
         conn = self._db_conn()
         queue = self._due_cards(conn)
@@ -587,6 +601,11 @@ class FlashcardsView(QWidget):
 
         if not cards:
             self._hide_table()
+            self.empty_label.setText(
+                "No flashcards yet.\n\n"
+                "Select text in the Extract Editor and choose\n"
+                "“🃏 Make flashcard…” to create one."
+            )
             self.empty_label.show()
             self.due_hint.hide()
             return
@@ -602,10 +621,33 @@ class FlashcardsView(QWidget):
         # day hides the table (the hint already says why) instead of
         # showing a blank box.
         visible = due if self.due_toggle.isChecked() else cards
+        # #110: the search box narrows further — case-insensitive
+        # substring over question + source label (which includes the
+        # source document name, so both filters compose).
+        needle = self.filter_input.text().strip().lower()
+        if needle:
+            visible = [
+                c
+                for c in visible
+                if needle in (c.question or "").lower()
+                or needle in _source_label(c).lower()
+            ]
         if not visible:
+            if needle and cards:
+                # Search with zero hits: say so, don't show an empty
+                # box (and don't claim "no cards" — they exist).
+                self._hide_table()
+                self.empty_label.setText(f"No cards match “{needle}”")
+                self.empty_label.show()
+                self.due_hint.hide()
+                return
             self._hide_table()
             return
+        self.empty_label.hide()
         self.table.show()
+        # Sort while filling makes Qt re-sort on every setItem — turn
+        # it off for the rebuild, on again after (#110).
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(visible))
         for row, card in enumerate(visible):
             items = [
@@ -633,6 +675,7 @@ class FlashcardsView(QWidget):
                             "Click to open the source Extract"
                         )
                 self.table.setItem(row, col, item)
+        self.table.setSortingEnabled(True)
         self._sync_row_actions()
 
     def _on_cell_clicked(self, row, column):
