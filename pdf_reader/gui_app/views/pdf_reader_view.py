@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QFrame,
     QDialog,
+    QInputDialog,
+    QMessageBox,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -564,6 +566,12 @@ class PDFReaderView(QWidget):
                     self._loading_document = False
             return
 
+        # Encrypted PDF (#116): probe + prompt BEFORE tearing down the
+        # old doc — cancel must leave the previous document intact.
+        password = self._prompt_password(pdf_path)
+        if password is None:
+            return
+
         # Clear existing document
         _t0 = time.perf_counter()
         self._loading_document = True
@@ -592,6 +600,8 @@ class PDFReaderView(QWidget):
 
             with perf_span("load_pdf: doc.load"):
                 self.doc = QPdfDocument(self)
+                if password:
+                    self.doc.setPassword(password)
                 self.doc.load(pdf_path)
                 count = self.doc.pageCount()
             if count <= 0:
@@ -618,6 +628,47 @@ class PDFReaderView(QWidget):
         finally:
             self._loading_document = False
             perf_log("load_pdf total", (time.perf_counter() - _t0) * 1000.0)
+
+    def _prompt_password(self, pdf_path: str):
+        """(#116) The password for `pdf_path`, '' when it needs none,
+        or None when the user cancelled.
+
+        Probes with pymupdf BEFORE `load_pdf` tears down the old
+        document — cancel therefore leaves the previous document
+        intact. A wrong password shows a clear warning and re-prompts
+        (same loop) instead of failing later with a blank viewer.
+        """
+        try:
+            probe = pymupdf.open(pdf_path)
+        except Exception:
+            # Unreadable/corrupt file: not a password problem — let the
+            # normal load path report it.
+            return ""
+        try:
+            if not probe.needs_pass:
+                return ""
+            # Empty user password: opens silently, no prompt needed.
+            if probe.authenticate(""):
+                return ""
+            while True:
+                pw, ok = QInputDialog.getText(
+                    self,
+                    "Password required",
+                    "This PDF is encrypted. Enter its password:",
+                    QLineEdit.EchoMode.Password,
+                )
+                if not ok:
+                    return None  # cancel — previous doc untouched
+                if pw and probe.authenticate(pw):
+                    return pw
+                QMessageBox.warning(
+                    self,
+                    "Incorrect password",
+                    "That password did not open this PDF. Try again "
+                    "or cancel.",
+                )
+        finally:
+            probe.close()
 
     def _saved_page_for(self, pdf_path: str) -> int:
         """Saved 0-based page from the library DB, 0 when unknown."""
