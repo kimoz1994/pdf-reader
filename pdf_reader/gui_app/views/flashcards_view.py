@@ -53,6 +53,7 @@ from services.extract_store import (
     list_due_cards,
     list_flashcards,
     record_review,
+    study_stats,
     update_flashcard_question,
 )
 from services.fsrs_scheduler import (
@@ -469,6 +470,14 @@ class FlashcardsView(QWidget):
         header_row.addWidget(self.review_btn)
         layout.addLayout(header_row)
 
+        # Study stats (#111): a quiet strip under the header — reviews
+        # today, total cards, due tomorrow / next 7 days, and the
+        # consecutive-day streak. Refreshed with the list.
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet("color: #95a5a6; font-size: 13px;")
+        self.stats_label.hide()
+        layout.addWidget(self.stats_label)
+
         # Visible "nothing to study" state (#59 AC) — a disabled
         # button's tooltip alone is too easy to miss.
         self.due_hint = QLabel()
@@ -560,6 +569,27 @@ class FlashcardsView(QWidget):
             return []
         return list_due_cards(conn, end_of_local_day_utc())
 
+    def _refresh_stats(self, conn):
+        """(#111) Fill the stats strip from `study_stats`; hide it when
+        there's nothing to report (empty library / no conn)."""
+        if conn is None:
+            self.stats_label.hide()
+            return
+        s = study_stats(conn)
+        if s["total_cards"] == 0 and s["reviews_today"] == 0 and s["streak"] == 0:
+            self.stats_label.hide()
+            return
+        parts = [
+            f"📚 {s['total_cards']} cards",
+            f"✅ {s['reviews_today']} reviewed today",
+            f"📅 {s['due_tomorrow']} due tomorrow",
+            f"🗓 {s['due_next_7_days']} due in 7 days",
+        ]
+        if s["streak"] > 0:
+            parts.append(f"🔥 {s['streak']}-day streak")
+        self.stats_label.setText("  ·  ".join(parts))
+        self.stats_label.show()
+
     def _toggle_due_today(self, _checked):
         """(#61) The filter button flipped — reload the list. The
         Review button count and the empty-day hint are filter-
@@ -598,6 +628,7 @@ class FlashcardsView(QWidget):
         self.review_btn.setToolTip(
             "No cards due today" if not due else ""
         )
+        self._refresh_stats(conn)
 
         if not cards:
             self._hide_table()
