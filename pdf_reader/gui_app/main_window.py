@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QStackedWidget, QFrame, QMessageBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QSettings
 from PyQt6.QtGui import QFont
 from pathlib import Path
 
@@ -15,6 +15,11 @@ from views.extracts_view import ExtractsView
 from views.flashcards_view import FlashcardsView
 from services.extract_store import init_schema, resolve_doc_id
 from services.perf_log import span as perf_span, discard as perf_discard
+from services.window_settings import (
+    make_app_icon,
+    restore_window_state,
+    save_window_state,
+)
 
 
 # Sidebar button states (#55): one active (blue), the rest idle.
@@ -51,6 +56,8 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle("PDF Reader")
         self.setMinimumSize(1400, 900)
+        # App icon (#117): drawn at runtime, no bundled asset.
+        self.setWindowIcon(make_app_icon())
         
         # Central widget
         self.central_widget = QWidget()
@@ -108,6 +115,18 @@ class MainWindow(QMainWindow):
         
         # Show library by default
         self.show_library()
+
+        # Geometry restore (#117): after show() so Qt has a real frame;
+        # first launch (no settings) keeps the defaults.
+        self._app_settings = QSettings("pdf-reader", "pdf-reader")
+        restore_window_state(self._app_settings, self, self.sidebar)
+
+    def closeEvent(self, event):
+        """Persist window geometry + sidebar width before closing (#117)."""
+        settings = getattr(self, "_app_settings", None)
+        if settings is not None:
+            save_window_state(settings, self, self.sidebar)
+        super().closeEvent(event)
     
     def create_sidebar(self):
         """Create sidebar with 4 navigation buttons"""
