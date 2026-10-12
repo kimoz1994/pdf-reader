@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui import (
@@ -595,6 +596,13 @@ class PDFReaderView(QWidget):
             if count <= 0:
                 print(f"Could not load PDF: {pdf_path}")
                 self.doc = None
+                QMessageBox.warning(
+                    self,
+                    "Cannot open PDF",
+                    f"Could not open:\n{pdf_path}\n\n"
+                    "The file may be corrupt, password-protected, "
+                    "or not a valid PDF.",
+                )
                 return
 
             saved_page = min(saved_page, count - 1)
@@ -1077,6 +1085,7 @@ class PDFReaderView(QWidget):
         except Exception as e:
             print(f"Search error: {e}")
             self.search_matches = []
+            self._toast("Search failed")
 
         self.current_result_index = -1
         if self.search_matches:
@@ -1165,6 +1174,12 @@ class PDFReaderView(QWidget):
         if hasattr(main_window, "db_conn"):
             return main_window.db_conn()
         return None
+
+    def _toast(self, message: str, timeout: int = 5000):
+        """Status-bar message when embedded in MainWindow; no-op standalone."""
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(message, timeout)
 
     def _current_doc_id(self):
         conn = self._db_conn()
@@ -1302,6 +1317,11 @@ class PDFReaderView(QWidget):
         conn = self._db_conn()
         doc_id = self._current_doc_id()
         if conn is None or doc_id is None:
+            # The PDF row is gone (removed from the library while open):
+            # say so and keep the pending selections, not a silent no-op (#102).
+            self.working_label.setText(
+                "Could not save — PDF is not in the library"
+            )
             return
         store_commit_working_set(conn, doc_id, self.working_set)
         self.working_set = []
