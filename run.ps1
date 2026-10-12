@@ -15,6 +15,12 @@ if (-not (Test-Path $python)) {
 
 Push-Location $guiDir
 try {
+    $marker = Join-Path $guiDir "perf.enabled"
+    if ($env:PDFR_DEBUG_PERF -or (Test-Path $marker)) {
+        Write-Host "[perf] logging ON -> console + $guiDir\perf.log" -ForegroundColor Yellow
+    } else {
+        Write-Host "[perf] logging OFF (create pdf_reader\gui_app\perf.enabled or set `$env:PDFR_DEBUG_PERF=`"1`")" -ForegroundColor DarkGray
+    }
     & $python main.py
 }
 finally {

@@ -39,7 +39,7 @@ from services.extract_store import (
     resolve_doc_id,
 )
 from services.element_detector import ElementDetector
-from services.perf_log import ENABLED as PERF_ENABLED, log as perf_log, span as perf_span
+from services.perf_log import ENABLED as PERF_ENABLED, log as perf_log, span as perf_span, mark as perf_mark
 from services.pdf_geometry import (
     CUSTOM,
     FIT_TO_WIDTH,
@@ -542,6 +542,28 @@ class PDFReaderView(QWidget):
     # ------------------------------------------------------------
 
     def load_pdf(self, pdf_path: str):
+        # Reopen of the still-loaded document (#94): Back only hides the
+        # reader — the QPdfDocument/QPdfView pair is already live — so
+        # re-parsing the file and re-running setDocument is pure cost
+        # (that round-trip is the whole "open again feels slow").
+        if (
+            self.doc is not None
+            and self.current_pdf == pdf_path
+            and self.doc.pageCount() > 0
+        ):
+            with perf_span("load_pdf: reopen fast path"):
+                self._loading_document = True
+                try:
+                    self.last_visible_page = 0
+                    self._reset_search_state()
+                    self._reset_extract_state()
+                    count = self.doc.pageCount()
+                    saved_page = min(self._saved_page_for(pdf_path), count - 1)
+                    self._jump_to_saved_page(saved_page, count)
+                finally:
+                    self._loading_document = False
+            return
+
         # Clear existing document
         _t0 = time.perf_counter()
         self._loading_document = True
@@ -556,26 +578,12 @@ class PDFReaderView(QWidget):
 
             self.current_pdf = pdf_path
             self.last_visible_page = 0
-            saved_page = 0
             self._reset_search_state()
 
             # Reset extraction workflow state for the new document
             self._reset_extract_state()
 
-            try:
-                main_window = self.window()
-                if hasattr(main_window, "library_view"):
-                    library_view = main_window.library_view
-                    library_view.cursor.execute(
-                        "SELECT current_page FROM pdfs WHERE path = ?",
-                        (pdf_path,),
-                    )
-                    row = library_view.cursor.fetchone()
-                    if row and row[0]:
-                        saved_page = max(0, int(row[0]) - 1)
-            except Exception as e:
-                print(f"Error restoring saved page: {e}")
-                saved_page = 0
+            saved_page = self._saved_page_for(pdf_path)
 
             with perf_span("load_pdf: doc.load"):
                 self.doc = QPdfDocument(self)
@@ -600,28 +608,51 @@ class PDFReaderView(QWidget):
             # _reset_extract_state already cleared extract_captures, so
             # any refresh triggered by the jump below draws nothing yet.
 
-            # Jump to saved page
-            with perf_span("load_pdf: jump"):
-                self.pdf_view.pageNavigator().jump(
-                    saved_page, QPointF(0.0, 0.0), 0.0
-                )
+            self._jump_to_saved_page(saved_page, count)
 
-            self.last_visible_page = saved_page
-            self.page_label.setText(
-                f"Page: {saved_page + 1}/{count}"
-            )
-            self.prev_btn.setEnabled(saved_page > 0)
-            self.next_btn.setEnabled(saved_page < count - 1)
-
-            if self.current_pdf:
-                self.progress_changed.emit(
-                    self.current_pdf, saved_page + 1
-                )
-
-            self.setFocus()
         finally:
             self._loading_document = False
             perf_log("load_pdf total", (time.perf_counter() - _t0) * 1000.0)
+
+    def _saved_page_for(self, pdf_path: str) -> int:
+        """Saved 0-based page from the library DB, 0 when unknown."""
+        try:
+            main_window = self.window()
+            if hasattr(main_window, "library_view"):
+                library_view = main_window.library_view
+                library_view.cursor.execute(
+                    "SELECT current_page FROM pdfs WHERE path = ?",
+                    (pdf_path,),
+                )
+                row = library_view.cursor.fetchone()
+                if row and row[0]:
+                    return max(0, int(row[0]) - 1)
+        except Exception as e:
+            print(f"Error restoring saved page: {e}")
+        return 0
+
+    def _jump_to_saved_page(self, saved_page: int, count: int):
+        """Jump the navigator to `saved_page` and sync everything that
+        follows — shared by the full load and the reopen fast path (#94):
+        page label, prev/next buttons, one progress emission, focus."""
+        with perf_span("load_pdf: jump"):
+            self.pdf_view.pageNavigator().jump(
+                saved_page, QPointF(0.0, 0.0), 0.0
+            )
+
+        self.last_visible_page = saved_page
+        self.page_label.setText(
+            f"Page: {saved_page + 1}/{count}"
+        )
+        self.prev_btn.setEnabled(saved_page > 0)
+        self.next_btn.setEnabled(saved_page < count - 1)
+
+        if self.current_pdf:
+            self.progress_changed.emit(
+                self.current_pdf, saved_page + 1
+            )
+
+        self.setFocus()
 
     # ------------------------------------------------------------
     # Scroll / page change
@@ -1441,6 +1472,9 @@ class PDFReaderView(QWidget):
 
     def go_back(self):
         with perf_span("reader.go_back"):
+            # Click instant; LibraryView.paintEvent logs the perceived
+            # latency when the library's first paint lands.
+            perf_mark("back")
             self._reset_extract_state()
             if self.current_pdf:
                 self.progress_changed.emit(

@@ -14,7 +14,7 @@ from views.pdf_reader_view import PDFReaderView
 from views.extracts_view import ExtractsView
 from views.flashcards_view import FlashcardsView
 from services.extract_store import init_schema, resolve_doc_id
-from services.perf_log import span as perf_span
+from services.perf_log import span as perf_span, discard as perf_discard
 
 
 # Sidebar button states (#55): one active (blue), the rest idle.
@@ -334,6 +334,10 @@ class MainWindow(QMainWindow):
         entered via a jump from there, to the Library otherwise."""
         with perf_span("main.go_back_from_reader"):
             if self._reader_return_view is self.extracts_view:
+                # Back landed somewhere other than the library: drop the
+                # click->paint mark so a later library paint can't pair
+                # with it and report a bogus latency.
+                perf_discard("back")
                 self.show_extracts()
             else:
                 self.show_library()
