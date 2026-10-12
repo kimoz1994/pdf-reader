@@ -380,3 +380,79 @@ def test_remove_failure_toasts(view, tmp_path, monkeypatch):
 
     assert fake_win._bar.messages
     assert "Could not remove" in fake_win._bar.messages[0]
+
+
+# ------------------------------------------------------------
+# Re-adding an existing PDF preserves history (#99)
+# ------------------------------------------------------------
+
+
+def _make_real_pdf(path, pages=3):
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page()
+    doc.save(str(path))
+    doc.close()
+
+
+def test_readd_same_pdf_preserves_id_progress_and_extracts(view, tmp_path):
+    """(#99) Re-adding a PDF already in the library must not reset its
+    id (which would orphan every extract/flashcard keyed to it) or its
+    read progress — name/page count just refresh from disk."""
+    from services.extract_store import init_schema
+
+    pdf = tmp_path / "a.pdf"
+    _make_real_pdf(pdf, pages=3)
+
+    view.add_pdf_to_library(str(pdf))
+    doc_id, page, pages = view.cursor.execute(
+        "SELECT id, current_page, total_pages FROM pdfs WHERE path = ?",
+        (str(pdf),),
+    ).fetchone()
+    assert pages == 3
+    assert page == 1
+
+    # advance progress + attach an extract to this document
+    init_schema(view.conn)
+    view.cursor.execute("UPDATE pdfs SET current_page = 2 WHERE id = ?", (doc_id,))
+    view.cursor.execute(
+        "INSERT INTO extracts (doc_id, created_at, type, text_content) "
+        "VALUES (?, datetime('now'), 'text', 'hello')",
+        (doc_id,),
+    )
+    view.conn.commit()
+
+    view.add_pdf_to_library(str(pdf))  # re-add the same file
+
+    new_id, new_page = view.cursor.execute(
+        "SELECT id, current_page FROM pdfs WHERE path = ?", (str(pdf),)
+    ).fetchone()
+    assert new_id == doc_id, "re-add must keep the same row id"
+    assert new_page == 2, "re-add must not reset read progress"
+    linked = view.cursor.execute(
+        "SELECT COUNT(*) FROM extracts WHERE doc_id = ?", (doc_id,)
+    ).fetchone()[0]
+    assert linked == 1, "extracts must stay linked to the same doc_id"
+
+
+def test_readd_refreshes_name_and_page_count(view, tmp_path):
+    """(#99) A re-add still does its job: page count and name refresh
+    from the file on disk."""
+    pdf = tmp_path / "a.pdf"
+    _make_real_pdf(pdf, pages=3)
+
+    view.add_pdf_to_library(str(pdf))
+    # simulate a stale row, then re-add after the file "grew"
+    view.cursor.execute("UPDATE pdfs SET name = 'old', total_pages = 1")
+    view.conn.commit()
+    _make_real_pdf(pdf, pages=5)
+
+    view.add_pdf_to_library(str(pdf))
+
+    name, pages = view.cursor.execute(
+        "SELECT name, total_pages FROM pdfs WHERE path = ?", (str(pdf),)
+    ).fetchone()
+    assert name == "a.pdf"
+    assert pages == 5

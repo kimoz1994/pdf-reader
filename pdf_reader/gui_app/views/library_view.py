@@ -476,7 +476,12 @@ class LibraryView(QWidget):
         self.load_library()
     
     def add_pdf_to_library(self, file_path: str):
-        """Add a single PDF to database"""
+        """Add a single PDF to database.
+
+        Re-adding a path already in the library updates name/page count
+        only — the row id, read progress and every extract/flashcard
+        keyed to it are preserved (#99).
+        """
         try:
             import fitz
             doc = fitz.open(file_path)
@@ -486,8 +491,11 @@ class LibraryView(QWidget):
             name = Path(file_path).name
             
             self.cursor.execute("""
-                INSERT OR REPLACE INTO pdfs (path, name, total_pages, current_page)
+                INSERT INTO pdfs (path, name, total_pages, current_page)
                 VALUES (?, ?, ?, 1)
+                ON CONFLICT(path) DO UPDATE SET
+                    name = excluded.name,
+                    total_pages = excluded.total_pages
             """, (file_path, name, total_pages))
             
             self.conn.commit()

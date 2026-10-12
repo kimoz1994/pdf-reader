@@ -118,7 +118,6 @@ class HelpDialog(QDialog):
             ("/", "Search", "Open search bar (again = refocus the input)"),
             ("Enter", "Search", "Run search and jump to the first match; again = next match"),
             ("Esc", "Search", "Close search (n/N become page navigation again)"),
-            ("h", "Hints", "Enter hint mode"),
             ("e", "Extract", "Commit the Working Set as one Extract"),
             ("Esc", "Extract", "Clear the Working Set (yellow highlights)"),
             ("Drag mouse", "Extract", "Select text into the Working Set"),
@@ -257,7 +256,6 @@ _CAPTURE_SCALE = 2.0
 class PDFReaderView(QWidget):
     back_requested = pyqtSignal()
     progress_changed = pyqtSignal(str, int)
-    hint_mode_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -856,13 +854,6 @@ class PDFReaderView(QWidget):
             return
 
         # Normal viewer mode (search bar not visible)
-        # Hint mode trigger (kept below the search branch so 'h' types
-        # into the search input while the bar is open, #75)
-        if key == Qt.Key.Key_H and modifiers == Qt.KeyboardModifier.NoModifier:
-            self.hint_mode_requested.emit()
-            event.accept()
-            return
-
         if (
             key == Qt.Key.Key_D
             and modifiers == Qt.KeyboardModifier.NoModifier
