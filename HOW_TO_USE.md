@@ -139,6 +139,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Reader | Discard pending selection(s) | `Esc` |
 | Reader | Delete newest Extract on this page | `d` `d` |
 | Reader | Navigate / search / zoom | `j` `k` `gg` `G` `Space` `/` `Enter` `n` `N` `Esc` `+` `-` |
+| Reader | Show/hide the document outline | **📑 Contents** toggle (left panel) — click an entry to jump to that page; disabled when the PDF has no outline |
 | Extracts view | Read / edit an Extract | select row → `Enter` / double-click → type → **💾 Save** / **← Back** |
 | Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |

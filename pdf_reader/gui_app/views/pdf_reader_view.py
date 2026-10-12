@@ -13,10 +13,11 @@ from PyQt6.QtWidgets import (
     QDialog,
     QInputDialog,
     QMessageBox,
+    QTreeWidget,
+    QTreeWidgetItem,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
-    QMessageBox,
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui import (
@@ -376,6 +377,16 @@ class PDFReaderView(QWidget):
         )
         toolbar.addWidget(self.working_label)
 
+        # TOC toggle (#113): checkable, disabled while the loaded
+        # document has no outline.
+        self.toc_toggle = QPushButton("📑 Contents")
+        self.toc_toggle.setCheckable(True)
+        self.toc_toggle.setChecked(True)
+        self.toc_toggle.setFixedHeight(35)
+        self.toc_toggle.setToolTip("Show/hide the document outline")
+        self.toc_toggle.toggled.connect(self._toggle_toc)
+        toolbar.addWidget(self.toc_toggle)
+
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
@@ -398,7 +409,35 @@ class PDFReaderView(QWidget):
         except Exception:
             pass
 
-        layout.addWidget(self.pdf_view)
+        # TOC side panel (#113): collapsible outline tree to the left of
+        # the viewer. Hidden while the document has no outline.
+        self.toc_panel = QFrame(self)
+        self.toc_panel.setObjectName("tocPanel")
+        self.toc_panel.setFixedWidth(230)
+        self.toc_panel.setStyleSheet(
+            "QFrame#tocPanel { background:#232323; border-right:1px solid #3a3a3a; }"
+        )
+        toc_layout = QVBoxLayout(self.toc_panel)
+        toc_layout.setContentsMargins(6, 6, 6, 6)
+        toc_header = QLabel("Contents")
+        toc_header.setStyleSheet("color:#bbbbbb;font-size:12px;font-weight:bold;")
+        toc_layout.addWidget(toc_header)
+        self.toc_tree = QTreeWidget(self.toc_panel)
+        self.toc_tree.setHeaderHidden(True)
+        self.toc_tree.setStyleSheet(
+            "QTreeWidget { background:transparent; border:none; color:#dddddd; }"
+            "QTreeWidget::item:selected { background:#3d5a80; color:white; }"
+        )
+        self.toc_tree.itemClicked.connect(self._on_toc_item_clicked)
+        toc_layout.addWidget(self.toc_tree)
+        self.toc_panel.hide()
+
+        viewer_row = QHBoxLayout()
+        viewer_row.setContentsMargins(0, 0, 0, 0)
+        viewer_row.setSpacing(0)
+        viewer_row.addWidget(self.toc_panel)
+        viewer_row.addWidget(self.pdf_view)
+        layout.addLayout(viewer_row)
 
         # Overlay for highlights
         self.highlight_overlay = SearchHighlightOverlay(self)
@@ -666,6 +705,68 @@ class PDFReaderView(QWidget):
         finally:
             self._loading_document = False
             perf_log("load_pdf total", (time.perf_counter() - _t0) * 1000.0)
+            # TOC tracks the loaded document (#113) — populated after a
+            # successful load, cleared on failure (panel hides itself).
+            if self.doc is not None and self.doc.pageCount() > 0:
+                self._populate_toc(pdf_path)
+            else:
+                self._populate_toc(None)
+
+    def _populate_toc(self, pdf_path):
+        """(#113) Fill the outline panel from PyMuPDF's get_toc().
+
+        `pdf_path=None` clears the tree. A document without an outline
+        hides the panel and disables the toggle (AC: no empty box)."""
+        self.toc_tree.clear()
+        entries = []
+        if pdf_path:
+            try:
+                with pymupdf.open(pdf_path) as probe:
+                    entries = probe.get_toc() or []
+            except Exception:
+                entries = []
+
+        for level, title, page in entries:
+            item = QTreeWidgetItem([str(title)])
+            item.setData(0, Qt.ItemDataRole.UserRole, int(page))
+            if level <= 1 or self.toc_tree.topLevelItemCount() == 0:
+                self.toc_tree.addTopLevelItem(item)
+            else:
+                parent = self.toc_tree.topLevelItem(
+                    self.toc_tree.topLevelItemCount() - 1
+                )
+                parent.addChild(item)
+            if level > 1:
+                item.setFirstColumnSpanned(True)
+
+        self.toc_tree.expandAll()
+        if entries:
+            self.toc_toggle.setEnabled(True)
+            self.toc_toggle.setChecked(True)
+            self.toc_panel.show()
+        else:
+            self.toc_toggle.setEnabled(False)
+            self.toc_toggle.setChecked(False)
+            self.toc_panel.hide()
+
+    def _toggle_toc(self, checked: bool):
+        """(#113) Toolbar toggle collapses/expands the panel."""
+        if not self.toc_toggle.isEnabled():
+            return
+        self.toc_panel.setVisible(checked)
+
+    def _on_toc_item_clicked(self, item: QTreeWidgetItem, _column: int):
+        """(#113 AC) Click an outline entry -> jump to that page."""
+        if self.doc is None:
+            return
+        count = self.doc.pageCount()
+        if count <= 0:
+            return
+        page = item.data(0, Qt.ItemDataRole.UserRole)
+        if page is None:
+            return
+        target = max(0, min(int(page) - 1, count - 1))
+        self._jump_to_saved_page(target, count)
 
     def _prompt_password(self, pdf_path: str):
         """(#116) The password for `pdf_path`, '' when it needs none,
