@@ -232,7 +232,8 @@ def test_reopen_same_pdf_reuses_loaded_document(view, app, fixture_pdf):
         "exactly one progress emission (no library -> saved page 1)"
     )
     assert view.last_visible_page == 0
-    assert view.page_label.text() == "Page: 1/2"
+    assert view.page_input.text() == "1"
+    assert view.page_total_label.text() == "/ 2"
 
 
 def test_open_different_pdf_takes_the_full_path(view, app, fixture_pdf, tmp_path):
@@ -325,7 +326,7 @@ def test_saved_zoom_restored_on_open(view, app, fixture_pdf, tmp_path):
 
     assert view.pdf_view.zoomMode().name == "Custom"
     assert abs(view.pdf_view.zoomFactor() - 1.5) < 1e-6
-    assert "150%" in view.zoom_label.text()
+    assert "150%" in view.zoom_fit_btn.text()
     conn.close()
 
 
@@ -353,5 +354,5 @@ def test_first_open_stays_fit(view, app, fixture_pdf):
     app.processEvents()
 
     assert view.pdf_view.zoomMode().name == "FitToWidth"
-    assert "Fit" in view.zoom_label.text()
+    assert "Fit" in view.zoom_fit_btn.text()
     conn.close()
