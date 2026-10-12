@@ -260,3 +260,37 @@ def test_help_dialog_documents_real_search_flow(app):
 
     slash = next(row for row in rows if row[0] == "/")
     assert "search" in slash[2].lower()
+
+
+# ------------------------------------------------------------
+# Errors surface to the user (#102, #103)
+# ------------------------------------------------------------
+
+
+def test_load_failure_shows_warning_dialog(view, app, tmp_path, monkeypatch):
+    """(#103 AC) A corrupt/non-PDF file must not leave a blank ghost
+    viewer — the user gets a dialog explaining the failure."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    fake = tmp_path / "broken.pdf"
+    fake.write_text("this is not a pdf")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a))
+
+    view.load_pdf(str(fake))
+    app.processEvents()
+
+    assert warnings, "no warning dialog for a failed load"
+    assert view.doc is None
+
+
+def test_commit_without_db_conn_reports_failure(view, app, monkeypatch):
+    """(#102 AC) `e` when the PDF row is gone says so on the Working
+    Set label instead of returning silently."""
+    monkeypatch.setattr(view, "_db_conn", lambda: None)
+    view.working_set = [1]  # non-empty so commit doesn't early-return
+
+    view.commit_working_set()
+
+    assert "Could not save" in view.working_label.text()
+    assert view.working_set == [1], "failed commit must keep the Working Set"

@@ -310,3 +310,73 @@ def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
 
     assert rebuilds == [1]
     assert view.needs_rebuild() is False  # load_library cleared the flag
+
+
+# ------------------------------------------------------------
+# Non-fatal errors reach the user (#104)
+# ------------------------------------------------------------
+
+
+class _FakeStatusBar:
+    def __init__(self):
+        self.messages = []
+
+    def showMessage(self, msg, *args):
+        self.messages.append(msg)
+
+
+class _FakeWindow:
+    def __init__(self):
+        self._bar = _FakeStatusBar()
+
+    def statusBar(self):
+        return self._bar
+
+
+def test_add_pdf_failure_toasts_instead_of_console_only(view, monkeypatch):
+    """(#104 AC) A failed add (bad file, disk error) tells the user via
+    the status bar — not just print()."""
+    import fitz
+
+    def boom(*_a, **_k):
+        raise RuntimeError("disk error")
+
+    monkeypatch.setattr(fitz, "open", boom)
+    fake_win = _FakeWindow()
+    monkeypatch.setattr(view, "window", lambda: fake_win)
+
+    view.add_pdf_to_library("C:/nonexistent/x.pdf")
+
+    assert fake_win._bar.messages
+    assert "Could not add" in fake_win._bar.messages[0]
+
+
+def test_remove_failure_toasts(view, tmp_path, monkeypatch):
+    """(#104) A DB error during removal is reported, not swallowed."""
+    seed(view, tmp_path / "a.pdf")
+    view.load_library()
+    rows(view)[0].checkbox.setChecked(True)
+    monkeypatch.setattr(view, "_confirm_removal", lambda names: True)
+    fake_win = _FakeWindow()
+    monkeypatch.setattr(view, "window", lambda: fake_win)
+
+    real_cursor = view.cursor
+
+    class BoomCursor:
+        def execute(self, sql, *a, **k):
+            if "DELETE" in sql:
+                raise RuntimeError("db locked")
+            return real_cursor.execute(sql, *a, **k)
+
+        def fetchall(self):
+            return real_cursor.fetchall()
+
+        def fetchone(self):
+            return real_cursor.fetchone()
+
+    view.cursor = BoomCursor()
+
+    view.remove_selected_pdfs()
+
+    assert fake_win._bar.messages
+    assert "Could not remove" in fake_win._bar.messages[0]
