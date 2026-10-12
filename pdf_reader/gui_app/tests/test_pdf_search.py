@@ -223,21 +223,22 @@ def test_matches_centred_in_viewport(view, app):
     assert 0 <= r.top() and r.bottom() <= overlay_h
 
 
-def test_h_does_not_trigger_hint_mode_while_search_open(view, app):
+def test_h_is_inert_in_all_modes(view, app):
+    """(#100) The dead hint-mode key was removed: h does nothing whether
+    the search bar is open (viewer focused) or closed."""
     open_search(view, app, "alpha")
     press_return(view.search_bar.search_input, app)  # viewer focused, bar open
-    fired = []
-    view.hint_mode_requested.connect(lambda: fired.append(1))
 
+    scroll_before = view.pdf_view.verticalScrollBar().value()
     QTest.keyClick(view, Qt.Key.Key_H)
     app.processEvents()
-    assert fired == []
+    assert view.pdf_view.verticalScrollBar().value() == scroll_before
 
     QTest.keyClick(view, Qt.Key.Key_Escape)
     app.processEvents()
     QTest.keyClick(view, Qt.Key.Key_H)
     app.processEvents()
-    assert fired == [1]
+    assert view.pdf_view.verticalScrollBar().value() == scroll_before
 
 
 def test_help_dialog_documents_real_search_flow(app):
