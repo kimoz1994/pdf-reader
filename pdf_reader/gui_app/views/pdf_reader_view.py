@@ -38,6 +38,7 @@ from services.extract_store import (
     resolve_doc_id,
 )
 from services.element_detector import ElementDetector
+from services.perf_log import ENABLED as PERF_ENABLED, log as perf_log, span as perf_span
 from services.pdf_geometry import (
     CUSTOM,
     FIT_TO_WIDTH,
@@ -214,16 +215,12 @@ class SearchHighlightOverlay(QWidget):
         self.current_rect = rect
         self.update()
 
-    def set_working_rects(self, rects: list[QRectF]):
-        self.working_rects = rects
-        self.update()
-
-    def set_extract_rects(self, rects: list[QRectF]):
-        self.extract_rects = rects
-        self.update()
-
-    def set_flash_rect(self, rect: QRectF | None):
-        self.flash_rect = rect
+    def set_rects(self, working, extracts, flash, current):
+        """Set everything at once so the overlay repaints a single time (#87)."""
+        self.working_rects = working
+        self.extract_rects = extracts
+        self.flash_rect = flash
+        self.current_rect = current
         self.update()
 
     def paintEvent(self, event):
@@ -267,6 +264,9 @@ class PDFReaderView(QWidget):
         self.doc = None  # QPdfDocument
         self.last_visible_page = 0
         self._loading_document = False
+        # Page sizes (points) of the loaded doc — pagePointSize() crossed
+        # the Python/C++ boundary once per page per scroll tick before (#87)
+        self._page_sizes_cache: list | None = None
 
         # Extract workflow state
         self.working_set = []  # list[Capture], the in-memory yellow set
@@ -542,6 +542,7 @@ class PDFReaderView(QWidget):
 
     def load_pdf(self, pdf_path: str):
         # Clear existing document
+        _t0 = time.perf_counter()
         self._loading_document = True
         try:
             if self.pdf_view:
@@ -550,6 +551,7 @@ class PDFReaderView(QWidget):
             if self.doc is not None:
                 self.doc.close()
                 self.doc = None
+            self._page_sizes_cache = None
 
             self.current_pdf = pdf_path
             self.last_visible_page = 0
@@ -574,9 +576,10 @@ class PDFReaderView(QWidget):
                 print(f"Error restoring saved page: {e}")
                 saved_page = 0
 
-            self.doc = QPdfDocument(self)
-            self.doc.load(pdf_path)
-            count = self.doc.pageCount()
+            with perf_span("load_pdf: doc.load"):
+                self.doc = QPdfDocument(self)
+                self.doc.load(pdf_path)
+                count = self.doc.pageCount()
             if count <= 0:
                 print(f"Could not load PDF: {pdf_path}")
                 self.doc = None
@@ -584,19 +587,23 @@ class PDFReaderView(QWidget):
 
             saved_page = min(saved_page, count - 1)
 
-            self.pdf_view.setDocument(self.doc)
-            self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
-            self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            with perf_span("load_pdf: setDocument"):
+                self.pdf_view.setDocument(self.doc)
+            with perf_span("load_pdf: pageMode+zoomMode"):
+                self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+                self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             self.zoom_label.setText("Zoom: Fit")
 
             # Re-draw persisted extracts (blue) for this document
-            self._load_extracts_from_db()
-            self._refresh_highlights()
+            with perf_span("load_pdf: extract load"):
+                self._load_extracts_from_db()
+                self._refresh_highlights()
 
             # Jump to saved page
-            self.pdf_view.pageNavigator().jump(
-                saved_page, QPointF(0.0, 0.0), 0.0
-            )
+            with perf_span("load_pdf: jump"):
+                self.pdf_view.pageNavigator().jump(
+                    saved_page, QPointF(0.0, 0.0), 0.0
+                )
 
             self.last_visible_page = saved_page
             self.page_label.setText(
@@ -613,6 +620,7 @@ class PDFReaderView(QWidget):
             self.setFocus()
         finally:
             self._loading_document = False
+            perf_log("load_pdf total", (time.perf_counter() - _t0) * 1000.0)
 
     # ------------------------------------------------------------
     # Scroll / page change
@@ -621,6 +629,7 @@ class PDFReaderView(QWidget):
     def on_page_changed(self, page_index: int):
         if not self.doc or self._loading_document:
             return
+        _t0 = time.perf_counter()
 
         self.last_visible_page = page_index
         count = self.doc.pageCount()
@@ -631,24 +640,21 @@ class PDFReaderView(QWidget):
         self.next_btn.setEnabled(page_index < count - 1)
 
         if self.current_pdf:
+            # One persistence path only (#87): the signal fans out to
+            # MainWindow.on_progress_changed -> library_view.update_progress.
+            # This used to ALSO write here, tripling UPDATE+commit per tick.
             self.progress_changed.emit(
                 self.current_pdf, page_index + 1
             )
-
-            try:
-                main_window = self.window()
-                if hasattr(main_window, "library_view"):
-                    library_view = main_window.library_view
-                    library_view.cursor.execute(
-                        "UPDATE pdfs SET current_page = ?, last_opened = CURRENT_TIMESTAMP WHERE path = ?",
-                        (page_index + 1, self.current_pdf),
-                    )
-                    library_view.conn.commit()
-            except Exception as e:
-                print(f"Error saving page to DB: {e}")
+        perf_log("on_page_changed", (time.perf_counter() - _t0) * 1000.0)
 
     def on_scroll(self, value: int):
+        if not PERF_ENABLED:
+            self._refresh_highlights()
+            return
+        _t0 = time.perf_counter()
         self._refresh_highlights()
+        perf_log("on_scroll", (time.perf_counter() - _t0) * 1000.0)
 
     # ------------------------------------------------------------
     # Jump-back: focus a Capture's original region
@@ -1120,9 +1126,10 @@ class PDFReaderView(QWidget):
         self._flash_region = None
         self._flash_timer.stop()
         self.working_label.setText("")
-        self.highlight_overlay.set_working_rects([])
-        self.highlight_overlay.set_extract_rects([])
-        self.highlight_overlay.set_flash_rect(None)
+        # One repaint (#87): clear the three extraction layers through the
+        # single-setter API, keeping the search rect untouched.
+        overlay = self.highlight_overlay
+        overlay.set_rects([], [], None, overlay.current_rect)
 
     def _db_conn(self):
         """The shared sqlite connection MainWindow keeps open, or None."""
@@ -1144,16 +1151,18 @@ class PDFReaderView(QWidget):
         count = self.doc.pageCount()
         if count <= 0:
             return None
-        try:
-            sizes = [
-                (
-                    self.doc.pagePointSize(i).width(),
-                    self.doc.pagePointSize(i).height(),
-                )
-                for i in range(count)
-            ]
-        except Exception:
-            return None
+        if self._page_sizes_cache is None or len(self._page_sizes_cache) != count:
+            try:
+                self._page_sizes_cache = [
+                    (
+                        self.doc.pagePointSize(i).width(),
+                        self.doc.pagePointSize(i).height(),
+                    )
+                    for i in range(count)
+                ]
+            except Exception:
+                return None
+        sizes = self._page_sizes_cache
         margins = self.pdf_view.documentMargins()
         vp = self.pdf_view.viewport()
         scroll = self.pdf_view.verticalScrollBar().value()
@@ -1179,12 +1188,23 @@ class PDFReaderView(QWidget):
 
     def _refresh_highlights(self, preview_widget_rect=None):
         """Recompute widget rects for working set + extracts + search and repaint."""
+        has_rects = (
+            bool(self.working_set)
+            or bool(self.extract_captures)
+            or self._flash_region is not None
+            or self._search_region is not None
+        )
+        if not has_rects and preview_widget_rect is None:
+            # Nothing to draw (#87): skip the layout build (it walks every
+            # page) and only clear the overlay if it still shows something.
+            ov = self.highlight_overlay
+            if ov.working_rects or ov.extract_rects or ov.flash_rect or ov.current_rect:
+                ov.set_rects([], [], None, None)
+            self._sync_working_label()
+            return
         layout = self._current_layout()
         if layout is None:
-            self.highlight_overlay.set_working_rects([])
-            self.highlight_overlay.set_extract_rects([])
-            self.highlight_overlay.set_flash_rect(None)
-            self.highlight_overlay.set_current_rect(None)
+            self.highlight_overlay.set_rects([], [], None, None)
             return
         try:
             working = [
@@ -1212,26 +1232,27 @@ class PDFReaderView(QWidget):
             return
         if preview_widget_rect is not None:
             working.append(rect_to_qrectf(preview_widget_rect))
-        self.highlight_overlay.set_working_rects(working)
-        self.highlight_overlay.set_extract_rects(extracts)
-        self.highlight_overlay.set_flash_rect(flash)
-        self.highlight_overlay.set_current_rect(current)
+        self.highlight_overlay.set_rects(working, extracts, flash, current)
+        self._sync_working_label()
 
+    def _sync_working_label(self):
+        """Set the Working Set label only when its text actually changes (#87)."""
         if self._delete_armed_id is not None:
-            self.working_label.setText(
-                "Delete armed: press d again to confirm"
-            )
+            text = "Delete armed: press d again to confirm"
         elif self.working_set:
-            self.working_label.setText(
+            text = (
                 f"Working Set: {len(self.working_set)} (e to commit, Esc to clear)"
             )
         else:
-            self.working_label.setText("")
+            text = ""
+        if self.working_label.text() != text:
+            self.working_label.setText(text)
 
     def reload_extract_captures(self):
         """Reload blue extracts from the DB and repaint (used on re-show)."""
-        self._load_extracts_from_db()
-        self._refresh_highlights()
+        with perf_span("reload_extract_captures"):
+            self._load_extracts_from_db()
+            self._refresh_highlights()
 
     def _load_extracts_from_db(self):
         """Reload blue extract rects for the current document from the DB."""
@@ -1414,14 +1435,16 @@ class PDFReaderView(QWidget):
         if self.doc is not None:
             self.doc.close()
             self.doc = None
+        self._page_sizes_cache = None
         self._loading_document = False
         event.accept()
 
     def go_back(self):
-        self._reset_extract_state()
-        if self.current_pdf:
-            self.progress_changed.emit(
-                self.current_pdf,
-                self.last_visible_page + 1,
-            )
-        self.back_requested.emit()
+        with perf_span("reader.go_back"):
+            self._reset_extract_state()
+            if self.current_pdf:
+                self.progress_changed.emit(
+                    self.current_pdf,
+                    self.last_visible_page + 1,
+                )
+            self.back_requested.emit()

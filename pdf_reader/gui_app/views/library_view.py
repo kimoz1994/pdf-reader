@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from services.extract_store import backup_database
+from services.perf_log import span as perf_span
 
 # Removal toolbar (#72): label base for the button; `_sync_removal_ui`
 # appends the ticked count when there is one.
@@ -322,6 +323,10 @@ class LibraryView(QWidget):
     
     def load_library(self):
         """Load PDFs from database"""
+        with perf_span("library.load_library"):
+            self._rebuild_library_list()
+
+    def _rebuild_library_list(self):
         self.pdf_list.clear()
         self.selected_pdfs.clear()
         
@@ -529,15 +534,16 @@ class LibraryView(QWidget):
 
     def update_progress(self, pdf_path: str, current_page: int):
         """Update progress for a PDF"""
-        try:
-            self.cursor.execute("""
-                UPDATE pdfs 
-                SET current_page = ?, last_opened = CURRENT_TIMESTAMP
-                WHERE path = ?
-            """, (current_page, pdf_path))
-            self.conn.commit()
-        except Exception as e:
-            print(f"Error updating progress: {e}")
+        with perf_span("library.update_progress"):
+            try:
+                self.cursor.execute("""
+                    UPDATE pdfs 
+                    SET current_page = ?, last_opened = CURRENT_TIMESTAMP
+                    WHERE path = ?
+                """, (current_page, pdf_path))
+                self.conn.commit()
+            except Exception as e:
+                print(f"Error updating progress: {e}")
     
     def closeEvent(self, event):
         self.conn.close()
