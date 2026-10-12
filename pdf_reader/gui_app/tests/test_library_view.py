@@ -90,16 +90,17 @@ def test_tick_shows_count_and_updates_stats(view, tmp_path):
     assert "selected" not in view.stats_label.text()
 
 
-def test_row_click_highlights_but_does_not_tick(view, tmp_path):
-    """Only the checkbox ticks — a stray click never arms a removal
-    (double-click to open stays safe); the click still highlights."""
+def test_row_click_does_nothing(view, tmp_path):
+    """(#93) A plain click must be a total no-op: no highlight (the
+    NoSelection mode kills it), no tick, no armed removal. Only the
+    checkbox changes state; double-click still opens."""
     seed(view, tmp_path / "a.pdf")
     view.load_library()
     row = rows(view)[0]
     row.resize(600, 80)
 
     QTest.mouseClick(row, Qt.MouseButton.LeftButton, pos=QPoint(row.width() - 8, 40))
-    assert view.pdf_list.item(0).isSelected()
+    assert not view.pdf_list.item(0).isSelected(), "click must not highlight"
     assert not row.checkbox.isChecked()
     assert not view.remove_btn.isEnabled()
 
