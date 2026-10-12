@@ -260,3 +260,96 @@ def test_help_dialog_documents_real_search_flow(app):
 
     slash = next(row for row in rows if row[0] == "/")
     assert "search" in slash[2].lower()
+
+
+# ------------------------------------------------------------
+# Working Set discard confirm (#107)
+# ------------------------------------------------------------
+
+
+def _press_discard_reply(monkeypatch, button):
+    from PyQt6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: button),
+    )
+
+
+def test_go_back_cancel_keeps_working_set(view, app, monkeypatch):
+    """(#107 AC) Declining the discard prompt leaves the reader open and
+    the pending yellow selections intact."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    view.working_set = [1, 2]
+    backs = []
+    view.back_requested.connect(lambda: backs.append(1))
+    _press_discard_reply(monkeypatch, QMessageBox.StandardButton.No)
+
+    view.go_back()
+
+    assert backs == [], "cancelled Back must not navigate away"
+    assert view.working_set == [1, 2]
+
+
+def test_go_back_confirm_discards_and_navigates(view, app, monkeypatch):
+    """(#107) Accepting the prompt clears the Working Set and emits Back."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    view.working_set = [1]
+    backs = []
+    view.back_requested.connect(lambda: backs.append(1))
+    _press_discard_reply(monkeypatch, QMessageBox.StandardButton.Yes)
+
+    view.go_back()
+
+    assert backs == [1]
+    assert view.working_set == []
+
+
+def test_go_back_with_empty_working_set_never_asks(view, app, monkeypatch):
+    """(#107) No pending selections → no dialog, Back just works."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    view.working_set = []
+    backs = []
+    view.back_requested.connect(lambda: backs.append(1))
+    asked = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: asked.append(1) or QMessageBox.StandardButton.Yes),
+    )
+
+    view.go_back()
+
+    assert asked == [], "empty Working Set must not prompt"
+    assert backs == [1]
+
+
+class _FakeCloseEvent:
+    def __init__(self):
+        self.accepted = False
+        self.ignored = False
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.ignored = True
+
+
+def test_close_event_cancel_keeps_working_set(view, app, monkeypatch):
+    """(#107) Window close with a non-empty Working Set asks; declining
+    cancels the close and keeps the selections."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    view.working_set = [1]
+    _press_discard_reply(monkeypatch, QMessageBox.StandardButton.No)
+    ev = _FakeCloseEvent()
+
+    view.closeEvent(ev)
+
+    assert ev.ignored
+    assert view.working_set == [1]

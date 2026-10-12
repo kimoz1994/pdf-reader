@@ -11,6 +11,7 @@ from services.extract_store import (
     backup_database,
     capture_overlaps_extract,
     commit_working_set,
+    count_flashcards_for_extract,
     create_flashcard,
     delete_extract,
     delete_flashcard,
@@ -1433,6 +1434,24 @@ def test_create_flashcard_allows_null_source(conn):
     assert cards[0].extract_id is None
     assert cards[0].doc_id is None
     assert cards[0].source_name is None
+
+
+def test_count_flashcards_for_extract(conn):
+    """(#108) The delete-confirm seam counts cards pointing at an Extract."""
+    doc_id = seed_pdf(conn)
+    a = commit_working_set(
+        conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "x")]
+    )
+    b = commit_working_set(
+        conn, doc_id, [Capture(1, (0, 0, 1, 1), "text", "y")]
+    )
+    create_flashcard(conn, "Q1", "A1", extract_id=a, doc_id=doc_id)
+    create_flashcard(conn, "Q2", "A2", extract_id=a, doc_id=doc_id)
+    create_flashcard(conn, "Q3", "A3", extract_id=b, doc_id=doc_id)
+
+    assert count_flashcards_for_extract(conn, a) == 2
+    assert count_flashcards_for_extract(conn, b) == 1
+    assert count_flashcards_for_extract(conn, 9999) == 0
 
 
 def test_create_flashcard_persists_image_blobs_in_order(conn):

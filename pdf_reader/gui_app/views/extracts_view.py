@@ -50,6 +50,7 @@ from PyQt6.QtGui import (
 from services.extract_store import (
     IMG_PLACEHOLDER,
     create_flashcard,
+    count_flashcards_for_extract,
     delete_extract,
     display_title,
     list_docs_with_extracts,
@@ -1243,10 +1244,20 @@ class ExtractsView(QWidget):
         conn = self._db_conn()
         if conn is None:
             return
+        n_cards = count_flashcards_for_extract(conn, extract_id)
+        msg = (
+            f"Delete Extract #{extract_id} and all of its captures?\n\n"
+            "This cannot be undone."
+        )
+        if n_cards:
+            msg += (
+                f"\n\n{n_cards} flashcard{'s' if n_cards != 1 else ''} "
+                "point at this Extract — they stay but lose their source link."
+            )
         reply = QMessageBox.question(
             self,
             "Delete Extract",
-            f"Delete Extract #{extract_id} and all of its captures?\n\nThis cannot be undone.",
+            msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
