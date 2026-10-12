@@ -378,6 +378,46 @@ def list_extracts_for_doc(conn, doc_id: int) -> List[Extract]:
 _PREVIEW_LEN = 60
 
 
+def list_capture_rects_for_doc(conn, doc_id: int) -> List[Capture]:
+    """Geometry-only Captures of a Document's Extracts (#88): ONE query, no
+    `image_blob`, no text. The reader's blue re-draw maps page/rect only —
+    pulling blobs here dragged megabytes through sqlite per open once image
+    Extracts existed. The Extract Editor and flashcard review keep using
+    `list_extracts_for_doc` (they need the blobs and text). Pasted images
+    (page/rect NULL, #48) are skipped: they have no location to redraw."""
+    rows = conn.execute(
+        """
+        SELECT page, rect, kind FROM captures
+        WHERE extract_id IN (SELECT id FROM extracts WHERE doc_id = ?)
+          AND page IS NOT NULL AND rect IS NOT NULL
+        ORDER BY id ASC
+        """,
+        (doc_id,),
+    ).fetchall()
+    return [
+        Capture(page=page, rect=_rect_from_str(rect), kind=kind)
+        for page, rect, kind in rows
+    ]
+
+
+def newest_extract_id_on_page(conn, doc_id: int, page: int):
+    """Id of the newest Extract that has a Capture on `page`, or None
+    (#88): ONE statement, never selecting `text_content`/`image_blob` —
+    this is the reader's `d`-delete probe, which only needs the id.
+    Matches `list_extracts_for_doc`'s newest-first order (id DESC)."""
+    row = conn.execute(
+        """
+        SELECT e.id FROM extracts e
+        JOIN captures c ON c.extract_id = e.id
+        WHERE e.doc_id = ? AND c.page = ?
+        ORDER BY e.id DESC
+        LIMIT 1
+        """,
+        (doc_id, page),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def preview_for_extract(extract: Extract) -> str:
     """One-line content preview for an Extract's row in the tree.
 
