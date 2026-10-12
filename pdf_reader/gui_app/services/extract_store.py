@@ -13,11 +13,13 @@ image Capture in capture order — the same character Qt uses, so editor
 round-trips are lossless.
 """
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 import os
 import sqlite3
+
+from .fsrs_scheduler import end_of_local_day_utc
 
 # Marks where an inline image sits inside the text blob. One per image
 # Capture, in capture order; count is normalized on every save.
@@ -955,3 +957,105 @@ def backup_database(conn, dest_dir, keep: int = 10) -> Path:
     for stale in old[: max(0, len(old) - (keep - 1))]:
         stale.unlink()
     return written
+
+
+def study_stats(conn, now: Optional[datetime] = None) -> dict:
+    """Aggregate numbers for the flashcards stats strip (#111).
+
+    Returns:
+      reviews_today  — review_logs rows stamped today (local day, UTC
+                       cutoffs matching `list_due_cards`)
+      total_cards    — every flashcard in the library
+      due_tomorrow   — cards due after today ends and through tomorrow's end
+      due_next_7_days — cards due after today ends and through the end of
+                        local day + 7 days (includes due_tomorrow)
+      streak         — consecutive local days ending today or yesterday
+                       that each have at least one review_log row
+
+    `now` exists so tests can pin the day; defaults to local now.
+    Pure Python + sqlite3, no Qt.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    tz = now.tzinfo
+    start_today = datetime.combine(now.date(), time.min, tzinfo=tz)
+    end_today = end_of_local_day_utc(now)
+    end_tomorrow = end_of_local_day_utc(
+        datetime.combine(now.date() + timedelta(days=1), time.max, tzinfo=tz)
+    )
+    end_week = end_of_local_day_utc(
+        datetime.combine(now.date() + timedelta(days=7), time.max, tzinfo=tz)
+    )
+
+    def _iso(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    # SQLite CURRENT_TIMESTAMP is UTC "YYYY-MM-DD HH:MM:SS"; compare
+    # against the same shape so reviewed_at filters are correct.
+    def _utc_stamp(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    start_stamp = _utc_stamp(start_today)
+    end_stamp = _utc_stamp(end_tomorrow)
+    week_stamp = _utc_stamp(end_week)
+
+    reviews_today = conn.execute(
+        "SELECT COUNT(*) FROM review_logs WHERE reviewed_at >= ? AND reviewed_at < ?",
+        (start_stamp, _utc_stamp(end_today)),
+    ).fetchone()[0]
+    total_cards = conn.execute(
+        "SELECT COUNT(*) FROM flashcards"
+    ).fetchone()[0]
+    due_tomorrow = conn.execute(
+        "SELECT COUNT(*) FROM flashcards WHERE due_utc > ? AND due_utc <= ?",
+        (_iso(end_today), _iso(end_tomorrow)),
+    ).fetchone()[0]
+    due_next_7_days = conn.execute(
+        "SELECT COUNT(*) FROM flashcards WHERE due_utc > ? AND due_utc <= ?",
+        (_iso(end_today), _iso(end_week)),
+    ).fetchone()[0]
+
+    # Streak: walk local review-days backwards from today, allowing the
+    # chain to start today OR yesterday (a day with no reviews yet).
+    review_days = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT reviewed_at FROM review_logs"
+        ).fetchall()
+    }
+    day = now.date()
+    # Convert stored UTC stamps back to local dates for comparison.
+    local_review_dates = set()
+    for stamp in review_days:
+        try:
+            dt = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except (TypeError, ValueError):
+            continue
+        local_review_dates.add(dt.astimezone(tz).date())
+
+    if day not in local_review_dates:
+        day -= timedelta(days=1)
+        if day not in local_review_dates:
+            streak = 0
+        else:
+            streak = 1
+            day -= timedelta(days=1)
+            while day in local_review_dates:
+                streak += 1
+                day -= timedelta(days=1)
+    else:
+        streak = 1
+        day -= timedelta(days=1)
+        while day in local_review_dates:
+            streak += 1
+            day -= timedelta(days=1)
+
+    return {
+        "reviews_today": reviews_today,
+        "total_cards": total_cards,
+        "due_tomorrow": due_tomorrow,
+        "due_next_7_days": due_next_7_days,
+        "streak": streak,
+    }
