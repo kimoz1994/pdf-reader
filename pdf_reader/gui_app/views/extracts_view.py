@@ -1174,9 +1174,17 @@ class ExtractsView(QWidget):
 
     def _close_editor(self):
         """Back: auto-save pending edits, hide the editor, restore the tree
-        exactly as it was."""
+        exactly as it was. A failed auto-save warns and keeps the editor
+        open — the edit is not silently lost (#101)."""
         if self._editor_dirty:
-            self._save_editor()
+            if not self._save_editor():
+                QMessageBox.critical(
+                    self,
+                    "Save failed",
+                    "Could not save your edits to the database.\n"
+                    "Stay in the editor and try 💾 Save again.",
+                )
+                return
         self.editor_page.hide()
         self.header_label.show()
         self.refresh_btn.show()

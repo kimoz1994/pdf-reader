@@ -201,3 +201,41 @@ def test_delete_confirm_omits_flashcard_line_when_none(app, conn, monkeypatch):
     view.delete_selected()
 
     assert seen and "flashcard" not in seen[0]
+
+
+# ------------------------------------------------------------
+# Back auto-save failure surfaces instead of silent loss (#101)
+# ------------------------------------------------------------
+
+
+def test_close_editor_failed_save_warns_and_stays(app, conn, monkeypatch):
+    """(#101 AC) A failed auto-save on Back must warn and keep the
+    editor open — the edit is not silently lost."""
+    doc_id, eid = seed_extract(conn)
+    view = make_view(conn, monkeypatch)
+    assert view.open_extract(doc_id, eid) is True
+    view._editor_doc_edit.setPlainText("edited")
+    view._editor_dirty = True
+    monkeypatch.setattr(view, "_save_editor", lambda: False)
+    criticals = []
+    monkeypatch.setattr(
+        "views.extracts_view.QMessageBox.critical", lambda *a: criticals.append(a)
+    )
+
+    view._close_editor()
+
+    assert criticals, "no error dialog shown"
+    assert view._editor_open, "editor must stay open on a failed save"
+
+
+def test_close_editor_successful_save_closes(app, conn, monkeypatch):
+    """(#101) A clean (or successful) auto-save still closes the editor."""
+    doc_id, eid = seed_extract(conn)
+    view = make_view(conn, monkeypatch)
+    assert view.open_extract(doc_id, eid) is True
+    view._editor_dirty = True
+    monkeypatch.setattr(view, "_save_editor", lambda: True)
+
+    view._close_editor()
+
+    assert not view._editor_open

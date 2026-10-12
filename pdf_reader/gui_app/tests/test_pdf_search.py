@@ -223,21 +223,22 @@ def test_matches_centred_in_viewport(view, app):
     assert 0 <= r.top() and r.bottom() <= overlay_h
 
 
-def test_h_does_not_trigger_hint_mode_while_search_open(view, app):
+def test_h_is_inert_in_all_modes(view, app):
+    """(#100) The dead hint-mode key was removed: h does nothing whether
+    the search bar is open (viewer focused) or closed."""
     open_search(view, app, "alpha")
     press_return(view.search_bar.search_input, app)  # viewer focused, bar open
-    fired = []
-    view.hint_mode_requested.connect(lambda: fired.append(1))
 
+    scroll_before = view.pdf_view.verticalScrollBar().value()
     QTest.keyClick(view, Qt.Key.Key_H)
     app.processEvents()
-    assert fired == []
+    assert view.pdf_view.verticalScrollBar().value() == scroll_before
 
     QTest.keyClick(view, Qt.Key.Key_Escape)
     app.processEvents()
     QTest.keyClick(view, Qt.Key.Key_H)
     app.processEvents()
-    assert fired == [1]
+    assert view.pdf_view.verticalScrollBar().value() == scroll_before
 
 
 def test_help_dialog_documents_real_search_flow(app):
@@ -353,3 +354,88 @@ def test_close_event_cancel_keeps_working_set(view, app, monkeypatch):
 
     assert ev.ignored
     assert view.working_set == [1]
+
+
+# ------------------------------------------------------------
+# Clickable Zoom Fit (#105) and go-to-page (#106)
+# ------------------------------------------------------------
+
+
+def test_zoom_fit_button_restores_fit_width(view, app):
+    """(#105 AC) Zooming in then clicking Fit returns to FitToWidth."""
+    from PyQt6.QtPdfWidgets import QPdfView
+
+    view.zoom_in()
+    assert view.pdf_view.zoomMode() == QPdfView.ZoomMode.Custom
+
+    view.zoom_fit_btn.click()
+
+    assert view.pdf_view.zoomMode() == QPdfView.ZoomMode.FitToWidth
+    assert view.zoom_fit_btn.text() == "Zoom: Fit"
+
+
+def test_zoom_in_label_shows_percentage(view, app):
+    """(#105) The Fit button's label reflects the custom zoom level."""
+    view.zoom_in()
+    assert "%" in view.zoom_fit_btn.text()
+
+
+def test_goto_page_input_jumps_and_clamps(view, app):
+    """(#106 AC) Typing a page number + Enter jumps; out-of-range values
+    clamp to the document; invalid text restores the current page."""
+    assert view.doc.pageCount() == 3
+
+    view.page_input.setText("3")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.last_visible_page == 2
+    assert view.page_input.text() == "3"
+
+    view.page_input.setText("99")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.last_visible_page == 2, "clamped to the last page"
+
+    view.page_input.setText("0")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.last_visible_page == 0, "clamped to the first page"
+
+    view.page_input.setText("abc")
+    QTest.keyClick(view.page_input, Qt.Key.Key_Return)
+    app.processEvents()
+    assert view.page_input.text() in ("1", "3"), "invalid input restores a page"
+
+
+# ------------------------------------------------------------
+# Errors surface to the user (#102, #103)
+# ------------------------------------------------------------
+
+
+def test_load_failure_shows_warning_dialog(view, app, tmp_path, monkeypatch):
+    """(#103 AC) A corrupt/non-PDF file must not leave a blank ghost
+    viewer — the user gets a dialog explaining the failure."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    fake = tmp_path / "broken.pdf"
+    fake.write_text("this is not a pdf")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a))
+
+    view.load_pdf(str(fake))
+    app.processEvents()
+
+    assert warnings, "no warning dialog for a failed load"
+    assert view.doc is None
+
+
+def test_commit_without_db_conn_reports_failure(view, app, monkeypatch):
+    """(#102 AC) `e` when the PDF row is gone says so on the Working
+    Set label instead of returning silently."""
+    monkeypatch.setattr(view, "_db_conn", lambda: None)
+    view.working_set = [1]  # non-empty so commit doesn't early-return
+
+    view.commit_working_set()
+
+    assert "Could not save" in view.working_label.text()
+    assert view.working_set == [1], "failed commit must keep the Working Set"
