@@ -39,7 +39,7 @@ from services.extract_store import (
     resolve_doc_id,
 )
 from services.element_detector import ElementDetector
-from services.perf_log import ENABLED as PERF_ENABLED, log as perf_log, span as perf_span
+from services.perf_log import ENABLED as PERF_ENABLED, log as perf_log, span as perf_span, mark as perf_mark
 from services.pdf_geometry import (
     CUSTOM,
     FIT_TO_WIDTH,
@@ -1472,6 +1472,9 @@ class PDFReaderView(QWidget):
 
     def go_back(self):
         with perf_span("reader.go_back"):
+            # Click instant; LibraryView.paintEvent logs the perceived
+            # latency when the library's first paint lands.
+            perf_mark("back")
             self._reset_extract_state()
             if self.current_pdf:
                 self.progress_changed.emit(

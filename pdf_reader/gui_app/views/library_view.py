@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from services.extract_store import backup_database
-from services.perf_log import span as perf_span
+from services.perf_log import span as perf_span, log_since as perf_log_since
 
 # Removal toolbar (#72): label base for the button; `_sync_removal_ui`
 # appends the ticked count when there is one.
@@ -346,6 +346,13 @@ class LibraryView(QWidget):
         never sets it (update_progress lands in place), so Back from the
         reader skips the full rebuild."""
         return self._structural_dirty
+
+    def paintEvent(self, event):
+        # Perceived Back latency (follow-up to #89): the mark is stamped
+        # at the click in reader.go_back; the first paint after the view
+        # switch is what the user actually sees.
+        super().paintEvent(event)
+        perf_log_since("back", "back: click -> library first paint")
 
     def _rebuild_library_list(self):
         self.pdf_list.clear()
