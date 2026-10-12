@@ -6,11 +6,11 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QStackedWidget, QFrame, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QAction, QFont, QKeySequence
 from pathlib import Path
 
 from views.library_view import LibraryView
-from views.pdf_reader_view import PDFReaderView
+from views.pdf_reader_view import PDFReaderView, HelpDialog
 from views.extracts_view import ExtractsView
 from views.flashcards_view import FlashcardsView
 from services.extract_store import init_schema, resolve_doc_id
@@ -105,7 +105,11 @@ class MainWindow(QMainWindow):
         self.flashcards_view.source_jump_requested.connect(
             self.on_flashcard_source
         )
-        
+
+        # Menu bar (#115) — after the views exist so File/Reader can
+        # call into them; Reader actions enable/disable with the stack.
+        self._build_menus()
+
         # Show library by default
         self.show_library()
     
@@ -345,3 +349,133 @@ class MainWindow(QMainWindow):
     def on_progress_changed(self, pdf_path: str, page: int):
         """Update progress in library"""
         self.library_view.update_progress(pdf_path, page)
+
+    # ------------------------------------------------------------
+    # Menu bar (#115)
+    # ------------------------------------------------------------
+
+    def _build_menus(self):
+        """Minimal menu bar. Single-letter reader keys stay in
+        keyPressEvent as the source of truth — menu items for them are
+        click-only (letter shown in the label, no setShortcut), so a
+        shortcut can never double-fire. Multi-key combos that
+        keyPressEvent does not handle get real QActions with shortcuts
+        so Qt prints them beside the label."""
+        bar = self.menuBar()
+
+        # --- File ---
+        file_menu = bar.addMenu("&File")
+        add_act = QAction("➕ Add PDF…", self)
+        add_act.setShortcut(QKeySequence("Ctrl+O"))
+        add_act.triggered.connect(self.library_view.add_pdf)
+        file_menu.addAction(add_act)
+
+        backup_act = QAction("💾 Backup library…", self)
+        backup_act.setShortcut(QKeySequence("Ctrl+B"))
+        backup_act.triggered.connect(self.library_view._backup_library)
+        file_menu.addAction(backup_act)
+
+        # Restore exists only once #109 lands; wire it when present.
+        if hasattr(self.library_view, "_restore_library"):
+            restore_act = QAction("♻️ Restore library…", self)
+            restore_act.triggered.connect(self.library_view._restore_library)
+            file_menu.addAction(restore_act)
+
+        file_menu.addSeparator()
+        quit_act = QAction("Quit", self)
+        quit_act.setShortcut(QKeySequence("Ctrl+Q"))
+        quit_act.triggered.connect(self.close)
+        file_menu.addAction(quit_act)
+
+        # --- View ---
+        view_menu = bar.addMenu("&View")
+        lib_act = QAction("📚 Library", self)
+        lib_act.setShortcut(QKeySequence("Ctrl+1"))
+        lib_act.triggered.connect(self.show_library)
+        view_menu.addAction(lib_act)
+        ext_act = QAction("📝 Extracts", self)
+        ext_act.setShortcut(QKeySequence("Ctrl+2"))
+        ext_act.triggered.connect(self.show_extracts)
+        view_menu.addAction(ext_act)
+        fc_act = QAction("🃏 Flashcards", self)
+        fc_act.setShortcut(QKeySequence("Ctrl+3"))
+        fc_act.triggered.connect(self.show_flashcards)
+        view_menu.addAction(fc_act)
+
+        # --- Reader (enabled only while the reader is on screen) ---
+        self.reader_menu = bar.addMenu("&Reader")
+        self._reader_menu_actions = []
+
+        def _reader_act(text, slot, shortcut=None):
+            act = QAction(text, self)
+            if shortcut is not None:
+                act.setShortcut(QKeySequence(shortcut))
+            act.triggered.connect(slot)
+            self.reader_menu.addAction(act)
+            self._reader_menu_actions.append(act)
+            return act
+
+        # Multi-key combos keyPressEvent does not handle → real shortcuts.
+        _reader_act("Find…", self.pdf_view.open_search, "Ctrl+F")
+        _reader_act("Zoom in", self.pdf_view.zoom_in, "Ctrl++")
+        _reader_act("Zoom out", self.pdf_view.zoom_out, "Ctrl+-")
+        _reader_act("Next page", self.pdf_view.next_page, "PgDown")
+        _reader_act("Previous page", self.pdf_view.prev_page, "PgUp")
+
+        # Zoom Fit (#105) / go-to-page (#106) land on other branches —
+        # wire when present so this menu grows with them.
+        if hasattr(self.pdf_view, "zoom_fit"):
+            _reader_act("Zoom: Fit", self.pdf_view.zoom_fit)
+        if hasattr(self.pdf_view, "page_input"):
+            go_act = _reader_act(
+                "Go to page…", self.pdf_view.page_input.setFocus
+            )
+            go_act.setShortcut(QKeySequence("Ctrl+G"))
+
+        self.reader_menu.addSeparator()
+        # Single-letter keys: click-only (no setShortcut — keyPressEvent
+        # owns them, including the search-bar / extract-mode branches).
+        _reader_act("Commit extract  (E)", self.pdf_view.commit_working_set)
+        _reader_act(
+            "Delete newest extract on page  (D, D)",
+            self.pdf_view._delete_key,
+        )
+
+        # --- Help ---
+        help_menu = bar.addMenu("&Help")
+        about_act = QAction("About", self)
+        about_act.triggered.connect(self._show_about)
+        help_menu.addAction(about_act)
+        shortcuts_act = QAction("Keyboard shortcuts…", self)
+        shortcuts_act.setShortcut(QKeySequence("Ctrl+/"))
+        shortcuts_act.triggered.connect(self._show_shortcuts)
+        help_menu.addAction(shortcuts_act)
+
+        # Reader menu lives or dies with the stack page.
+        self.stacked_widget.currentChanged.connect(self._sync_reader_menu)
+        self._sync_reader_menu(self.stacked_widget.currentIndex())
+
+    def _sync_reader_menu(self, index: int):
+        """(#115) Enable Reader actions only while the reader is the
+        current page; capture actions additionally need a live doc."""
+        on_reader = self.stacked_widget.widget(index) is self.pdf_view
+        has_doc = bool(getattr(self.pdf_view, "doc", None))
+        for act in getattr(self, "_reader_menu_actions", []):
+            text = act.text()
+            if "Commit extract" in text or "Delete newest" in text:
+                act.setEnabled(on_reader and has_doc)
+            else:
+                act.setEnabled(on_reader)
+
+    def _show_about(self):
+        QMessageBox.about(
+            self,
+            "About PDF Reader",
+            "PDF Reader\n\n"
+            "A local-first PDF study tool: capture passages, "
+            "review them as flashcards (FSRS), keep everything in "
+            "one library.db.",
+        )
+
+    def _show_shortcuts(self):
+        HelpDialog(self).exec()
