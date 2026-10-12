@@ -28,6 +28,7 @@ from services.extract_store import (
     preview_for_extract,
     record_review,
     resolve_doc_id,
+    restore_database,
     save_extract_text,
     set_capture_display_w,
     update_flashcard_question,
@@ -1710,3 +1711,25 @@ def test_backup_database_prunes_to_keep(conn, tmp_path):
     # file — the oldest was pruned.
     assert "library-20200103-000000.db" in remaining
     assert "library-20200101-000000.db" not in remaining
+
+
+def test_restore_database_replaces_content_in_place(conn, tmp_path):
+    """(#109 AC) Restore copies the snapshot's content into the live
+    connection — same connection object keeps working, sees the old data."""
+    seed_pdf(conn)
+    snapshot = backup_database(conn, tmp_path / "backups")
+
+    # Trash the live library after the snapshot was taken.
+    conn.execute("DELETE FROM pdfs")
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 0
+
+    restore_database(conn, snapshot)
+
+    assert conn.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 1
+
+
+def test_restore_database_missing_snapshot_raises(conn, tmp_path):
+    """(#109) A missing file is a clear error, not a silent no-op."""
+    with pytest.raises(FileNotFoundError):
+        restore_database(conn, tmp_path / "nope.db")

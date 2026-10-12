@@ -965,3 +965,20 @@ def backup_database(conn, dest_dir, keep: int = 10) -> Path:
     for stale in old[: max(0, len(old) - (keep - 1))]:
         stale.unlink()
     return written
+
+
+def restore_database(conn, snapshot_path) -> None:
+    """Replace the live database's content with the snapshot's, in place
+    (#109). Uses sqlite3's `backup()` API so every open connection keeps
+    working and sees the restored data — no file swap, no restart.
+    Raises FileNotFoundError when the snapshot is missing."""
+    snapshot_path = Path(snapshot_path)
+    if not snapshot_path.exists():
+        raise FileNotFoundError(snapshot_path)
+    source = sqlite3.connect(snapshot_path)
+    try:
+        # source.backup(target) copies source → target: the snapshot's
+        # content overwrites the live connection in place.
+        source.backup(conn)
+    finally:
+        source.close()
