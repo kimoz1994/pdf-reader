@@ -310,3 +310,149 @@ def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
 
     assert rebuilds == [1]
     assert view.needs_rebuild() is False  # load_library cleared the flag
+
+
+# ------------------------------------------------------------
+# Non-fatal errors reach the user (#104)
+# ------------------------------------------------------------
+
+
+class _FakeStatusBar:
+    def __init__(self):
+        self.messages = []
+
+    def showMessage(self, msg, *args):
+        self.messages.append(msg)
+
+
+class _FakeWindow:
+    def __init__(self):
+        self._bar = _FakeStatusBar()
+
+    def statusBar(self):
+        return self._bar
+
+
+def test_add_pdf_failure_toasts_instead_of_console_only(view, monkeypatch):
+    """(#104 AC) A failed add (bad file, disk error) tells the user via
+    the status bar — not just print()."""
+    import fitz
+
+    def boom(*_a, **_k):
+        raise RuntimeError("disk error")
+
+    monkeypatch.setattr(fitz, "open", boom)
+    fake_win = _FakeWindow()
+    monkeypatch.setattr(view, "window", lambda: fake_win)
+
+    view.add_pdf_to_library("C:/nonexistent/x.pdf")
+
+    assert fake_win._bar.messages
+    assert "Could not add" in fake_win._bar.messages[0]
+
+
+def test_remove_failure_toasts(view, tmp_path, monkeypatch):
+    """(#104) A DB error during removal is reported, not swallowed."""
+    seed(view, tmp_path / "a.pdf")
+    view.load_library()
+    rows(view)[0].checkbox.setChecked(True)
+    monkeypatch.setattr(view, "_confirm_removal", lambda names: True)
+    fake_win = _FakeWindow()
+    monkeypatch.setattr(view, "window", lambda: fake_win)
+
+    real_cursor = view.cursor
+
+    class BoomCursor:
+        def execute(self, sql, *a, **k):
+            if "DELETE" in sql:
+                raise RuntimeError("db locked")
+            return real_cursor.execute(sql, *a, **k)
+
+        def fetchall(self):
+            return real_cursor.fetchall()
+
+        def fetchone(self):
+            return real_cursor.fetchone()
+
+    view.cursor = BoomCursor()
+
+    view.remove_selected_pdfs()
+
+    assert fake_win._bar.messages
+    assert "Could not remove" in fake_win._bar.messages[0]
+
+
+# ------------------------------------------------------------
+# Re-adding an existing PDF preserves history (#99)
+# ------------------------------------------------------------
+
+
+def _make_real_pdf(path, pages=3):
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page()
+    doc.save(str(path))
+    doc.close()
+
+
+def test_readd_same_pdf_preserves_id_progress_and_extracts(view, tmp_path):
+    """(#99) Re-adding a PDF already in the library must not reset its
+    id (which would orphan every extract/flashcard keyed to it) or its
+    read progress — name/page count just refresh from disk."""
+    from services.extract_store import init_schema
+
+    pdf = tmp_path / "a.pdf"
+    _make_real_pdf(pdf, pages=3)
+
+    view.add_pdf_to_library(str(pdf))
+    doc_id, page, pages = view.cursor.execute(
+        "SELECT id, current_page, total_pages FROM pdfs WHERE path = ?",
+        (str(pdf),),
+    ).fetchone()
+    assert pages == 3
+    assert page == 1
+
+    # advance progress + attach an extract to this document
+    init_schema(view.conn)
+    view.cursor.execute("UPDATE pdfs SET current_page = 2 WHERE id = ?", (doc_id,))
+    view.cursor.execute(
+        "INSERT INTO extracts (doc_id, created_at, type, text_content) "
+        "VALUES (?, datetime('now'), 'text', 'hello')",
+        (doc_id,),
+    )
+    view.conn.commit()
+
+    view.add_pdf_to_library(str(pdf))  # re-add the same file
+
+    new_id, new_page = view.cursor.execute(
+        "SELECT id, current_page FROM pdfs WHERE path = ?", (str(pdf),)
+    ).fetchone()
+    assert new_id == doc_id, "re-add must keep the same row id"
+    assert new_page == 2, "re-add must not reset read progress"
+    linked = view.cursor.execute(
+        "SELECT COUNT(*) FROM extracts WHERE doc_id = ?", (doc_id,)
+    ).fetchone()[0]
+    assert linked == 1, "extracts must stay linked to the same doc_id"
+
+
+def test_readd_refreshes_name_and_page_count(view, tmp_path):
+    """(#99) A re-add still does its job: page count and name refresh
+    from the file on disk."""
+    pdf = tmp_path / "a.pdf"
+    _make_real_pdf(pdf, pages=3)
+
+    view.add_pdf_to_library(str(pdf))
+    # simulate a stale row, then re-add after the file "grew"
+    view.cursor.execute("UPDATE pdfs SET name = 'old', total_pages = 1")
+    view.conn.commit()
+    _make_real_pdf(pdf, pages=5)
+
+    view.add_pdf_to_library(str(pdf))
+
+    name, pages = view.cursor.execute(
+        "SELECT name, total_pages FROM pdfs WHERE path = ?", (str(pdf),)
+    ).fetchone()
+    assert name == "a.pdf"
+    assert pages == 5

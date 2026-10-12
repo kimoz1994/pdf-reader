@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui import (
@@ -119,7 +120,6 @@ class HelpDialog(QDialog):
             ("/", "Search", "Open search bar (again = refocus the input)"),
             ("Enter", "Search", "Run search and jump to the first match; again = next match"),
             ("Esc", "Search", "Close search (n/N become page navigation again)"),
-            ("h", "Hints", "Enter hint mode"),
             ("e", "Extract", "Commit the Working Set as one Extract"),
             ("Esc", "Extract", "Clear the Working Set (yellow highlights)"),
             ("Drag mouse", "Extract", "Select text into the Working Set"),
@@ -258,7 +258,6 @@ _CAPTURE_SCALE = 2.0
 class PDFReaderView(QWidget):
     back_requested = pyqtSignal()
     progress_changed = pyqtSignal(str, int)
-    hint_mode_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -618,6 +617,13 @@ class PDFReaderView(QWidget):
             if count <= 0:
                 print(f"Could not load PDF: {pdf_path}")
                 self.doc = None
+                QMessageBox.warning(
+                    self,
+                    "Cannot open PDF",
+                    f"Could not open:\n{pdf_path}\n\n"
+                    "The file may be corrupt, password-protected, "
+                    "or not a valid PDF.",
+                )
                 return
 
             saved_page = min(saved_page, count - 1)
@@ -865,13 +871,6 @@ class PDFReaderView(QWidget):
             return
 
         # Normal viewer mode (search bar not visible)
-        # Hint mode trigger (kept below the search branch so 'h' types
-        # into the search input while the bar is open, #75)
-        if key == Qt.Key.Key_H and modifiers == Qt.KeyboardModifier.NoModifier:
-            self.hint_mode_requested.emit()
-            event.accept()
-            return
-
         if (
             key == Qt.Key.Key_D
             and modifiers == Qt.KeyboardModifier.NoModifier
@@ -1145,6 +1144,7 @@ class PDFReaderView(QWidget):
         except Exception as e:
             print(f"Search error: {e}")
             self.search_matches = []
+            self._toast("Search failed")
 
         self.current_result_index = -1
         if self.search_matches:
@@ -1233,6 +1233,12 @@ class PDFReaderView(QWidget):
         if hasattr(main_window, "db_conn"):
             return main_window.db_conn()
         return None
+
+    def _toast(self, message: str, timeout: int = 5000):
+        """Status-bar message when embedded in MainWindow; no-op standalone."""
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(message, timeout)
 
     def _current_doc_id(self):
         conn = self._db_conn()
@@ -1370,6 +1376,11 @@ class PDFReaderView(QWidget):
         conn = self._db_conn()
         doc_id = self._current_doc_id()
         if conn is None or doc_id is None:
+            # The PDF row is gone (removed from the library while open):
+            # say so and keep the pending selections, not a silent no-op (#102).
+            self.working_label.setText(
+                "Could not save — PDF is not in the library"
+            )
             return
         store_commit_working_set(conn, doc_id, self.working_set)
         self.working_set = []
