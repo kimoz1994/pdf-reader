@@ -37,7 +37,7 @@ We'll use the bundled sample `test.pdf` so you don't need your own file (or add 
 3. Click it (or press **`Delete`** with the list focused) and confirm: the dialog lists the ticked names behind **Show details** and reminds you the files themselves are untouched.
 4. A file you moved or deleted elsewhere no longer vanishes from the list — it stays marked **⚠ file missing** in orange, so you can tick and remove it like any other row (double-clicking it explains it can't be opened).
 
-**Back up your study data**: your Extracts, flashcards and study schedule all live in one file (`library.db`). Click **💾 Backup** in the Library header any time — it saves a consistent copy to the `backups/` folder next to the app, named with the date and time (e.g. `library-20261011-143000.db`), and tells you exactly where it went. Keep a copy somewhere safe (another drive, cloud folder). Old backups are trimmed automatically to the newest 10.
+**Back up your study data**: your Extracts, flashcards and study schedule all live in one file (`library.db`). Click **💾 Backup** in the Library header any time — it saves a consistent copy to the `backups/` folder next to the app, named with the date and time (e.g. `library-20261011-143000.db`), and tells you exactly where it went. Keep a copy somewhere safe (another drive, cloud folder). Old backups are trimmed automatically to the newest 10. **♻️ Restore** (next to Backup) loads one of those snapshots back: pick the snapshot, confirm, and your library is replaced in place — open Extracts or Flashcards to see the restored data. Restore asks before overwriting, so a misclick can't destroy anything.
 
 ### 2. Navigate like a pro (keyboard-first)
 
@@ -158,6 +158,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
 | Library | Remove the ticked PDFs | **🗑️ Remove Selected** (confirm) or `Delete` |
 | Library | Back up your study data | **💾 Backup** — saves a copy of `library.db` to `backups/` and shows you where |
+| Library | Load a previous backup | **♻️ Restore** — pick a snapshot from `backups/`, confirm, and the library is replaced |
 
 ---
 

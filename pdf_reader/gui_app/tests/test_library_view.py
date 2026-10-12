@@ -310,3 +310,84 @@ def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
 
     assert rebuilds == [1]
     assert view.needs_rebuild() is False  # load_library cleared the flag
+
+
+# ------------------------------------------------------------
+# Restore from backup (#109)
+# ------------------------------------------------------------
+
+
+def test_restore_replaces_library_content(view, tmp_path, monkeypatch):
+    """(#109 AC) Picking a snapshot + confirming replaces the live
+    library's rows with the snapshot's, in place."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    seed(view, tmp_path / "a.pdf")
+    seed(view, tmp_path / "b.pdf")
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information", lambda *a: None
+    )
+    view.backup_btn.click()
+    snapshots = list(view.backups_dir.glob("library-*.db"))
+    assert len(snapshots) == 1
+
+    # Trash the live library after the snapshot.
+    view.cursor.execute("DELETE FROM pdfs")
+    view.conn.commit()
+    view.load_library()
+    assert view.pdf_list.count() == 0
+
+    monkeypatch.setattr(
+        "views.library_view.QInputDialog.getItem",
+        lambda *a, **k: (snapshots[0].name, True),
+    )
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.Yes,
+    )
+
+    view.restore_btn.click()
+
+    assert view.cursor.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 2
+    assert view.pdf_list.count() == 2
+
+
+def test_restore_cancelled_changes_nothing(view, tmp_path, monkeypatch):
+    """(#109) Declining the confirm leaves the live library untouched."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    seed(view, tmp_path / "a.pdf")
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information", lambda *a: None
+    )
+    view.backup_btn.click()
+    (snapshot,) = view.backups_dir.glob("library-*.db")
+
+    view.cursor.execute("DELETE FROM pdfs")
+    view.conn.commit()
+
+    monkeypatch.setattr(
+        "views.library_view.QInputDialog.getItem",
+        lambda *a, **k: (snapshot.name, True),
+    )
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.No,
+    )
+
+    view.restore_btn.click()
+
+    assert view.cursor.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 0
+
+
+def test_restore_with_no_backups_shows_info(view, monkeypatch):
+    """(#109) Empty backups/ → helpful info, no crash."""
+    infos = []
+    monkeypatch.setattr(
+        "views.library_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.restore_btn.click()
+
+    assert infos and "No backups" in infos[0][2]
