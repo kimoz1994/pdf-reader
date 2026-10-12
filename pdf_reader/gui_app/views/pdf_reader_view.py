@@ -115,6 +115,8 @@ class HelpDialog(QDialog):
             ("Backspace", "Navigation", "Page up"),
             ("+ / =", "Zoom", "Zoom in"),
             ("-", "Zoom", "Zoom out"),
+            ("Zoom: Fit (click)", "Zoom", "Restore fit-width zoom"),
+            ("Page input + Enter", "Navigation", "Jump to a page number"),
             ("/", "Search", "Open search bar (again = refocus the input)"),
             ("Enter", "Search", "Run search and jump to the first match; again = next match"),
             ("Esc", "Search", "Close search (n/N become page navigation again)"),
@@ -317,11 +319,17 @@ class PDFReaderView(QWidget):
         self.zoom_out_btn.clicked.connect(self.zoom_out)
         toolbar.addWidget(self.zoom_out_btn)
 
-        self.zoom_label = QLabel("Zoom: Fit")
-        self.zoom_label.setStyleSheet(
-            "color:white;font-size:14px;"
+        # Clickable Fit indicator (#105): shows the current zoom mode and
+        # restores FitToWidth when clicked (there was no way back after +/-).
+        self.zoom_fit_btn = QPushButton("Zoom: Fit")
+        self.zoom_fit_btn.setFixedHeight(35)
+        self.zoom_fit_btn.setStyleSheet(
+            "color:white;font-size:14px;background:transparent;"
+            "border:1px solid #555;padding:0 8px;"
         )
-        toolbar.addWidget(self.zoom_label)
+        self.zoom_fit_btn.clicked.connect(self.zoom_fit)
+        self.zoom_fit_btn.setToolTip("Restore fit-width zoom")
+        toolbar.addWidget(self.zoom_fit_btn)
 
         self.zoom_in_btn = QPushButton("🔍 +")
         self.zoom_in_btn.setFixedHeight(35)
@@ -334,11 +342,24 @@ class PDFReaderView(QWidget):
         self.prev_btn.setEnabled(False)
         toolbar.addWidget(self.prev_btn)
 
-        self.page_label = QLabel("Page: -")
-        self.page_label.setStyleSheet(
+        # Editable go-to-page (#106): type a number + Enter.
+        self.page_input = QLineEdit()
+        self.page_input.setFixedWidth(50)
+        self.page_input.setFixedHeight(35)
+        self.page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_input.setStyleSheet(
+            "color:white;font-size:14px;background:#3a3a3a;"
+            "border:1px solid #555;border-radius:3px;"
+        )
+        self.page_input.returnPressed.connect(self._goto_page_from_input)
+        self.page_input.setToolTip("Page number — type and press Enter")
+        toolbar.addWidget(self.page_input)
+
+        self.page_total_label = QLabel("/ -")
+        self.page_total_label.setStyleSheet(
             "color:white;font-size:14px;"
         )
-        toolbar.addWidget(self.page_label)
+        toolbar.addWidget(self.page_total_label)
 
         self.next_btn = QPushButton("Next ▶")
         self.next_btn.setFixedHeight(35)
@@ -612,7 +633,7 @@ class PDFReaderView(QWidget):
             with perf_span("load_pdf: pageMode+zoomMode"):
                 self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
                 self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-            self.zoom_label.setText("Zoom: Fit")
+            self.zoom_fit_btn.setText("Zoom: Fit")
 
             # Blue extracts load exactly once per open (#88): in
             # show_pdf_view -> reload_extract_captures, not here too.
@@ -652,9 +673,7 @@ class PDFReaderView(QWidget):
             )
 
         self.last_visible_page = saved_page
-        self.page_label.setText(
-            f"Page: {saved_page + 1}/{count}"
-        )
+        self._sync_page_display(saved_page, count)
         self.prev_btn.setEnabled(saved_page > 0)
         self.next_btn.setEnabled(saved_page < count - 1)
 
@@ -676,9 +695,7 @@ class PDFReaderView(QWidget):
 
         self.last_visible_page = page_index
         count = self.doc.pageCount()
-        self.page_label.setText(
-            f"Page: {page_index + 1}/{count}"
-        )
+        self._sync_page_display(page_index, count)
         self.prev_btn.setEnabled(page_index > 0)
         self.next_btn.setEnabled(page_index < count - 1)
 
@@ -1006,7 +1023,7 @@ class PDFReaderView(QWidget):
         current = self.pdf_view.zoomFactor()
         new = min(5.0, current + 0.25)
         self.pdf_view.setZoomFactor(new)
-        self.zoom_label.setText(
+        self.zoom_fit_btn.setText(
             f"Zoom: {int(new * 100)}%"
         )
         self._refresh_highlights()
@@ -1016,10 +1033,52 @@ class PDFReaderView(QWidget):
         current = self.pdf_view.zoomFactor()
         new = max(0.25, current - 0.25)
         self.pdf_view.setZoomFactor(new)
-        self.zoom_label.setText(
+        self.zoom_fit_btn.setText(
             f"Zoom: {int(new * 100)}%"
         )
         self._refresh_highlights()
+
+    def zoom_fit(self):
+        """Restore FitToWidth (#105) — the way back after +/- zoom."""
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        self.zoom_fit_btn.setText("Zoom: Fit")
+        self._refresh_highlights()
+
+    # ------------------------------------------------------------
+    # Go to page (#106)
+    # ------------------------------------------------------------
+
+    def _sync_page_display(self, page_index: int, count: int):
+        """Refresh the page input + total — skipped while the user is
+        typing in the input so a scroll event can't clobber an edit."""
+        if self.page_input.hasFocus():
+            return
+        self.page_input.setText(str(page_index + 1))
+        self.page_total_label.setText(f"/ {count}")
+
+    def _goto_page_from_input(self):
+        """Enter in the page input: jump to the typed page, clamped."""
+        if self.doc is None:
+            return
+        count = self.doc.pageCount()
+        if count <= 0:
+            return
+        try:
+            page = int(self.page_input.text().strip())
+        except ValueError:
+            page = self.last_visible_page + 1
+        page = max(1, min(count, page))
+        self.pdf_view.pageNavigator().jump(
+            page - 1, QPointF(0.0, 0.0), 0.0
+        )
+        self.last_visible_page = page - 1
+        self.page_input.setText(str(page))
+        self.page_total_label.setText(f"/ {count}")
+        self.prev_btn.setEnabled(page > 1)
+        self.next_btn.setEnabled(page < count)
+        if self.current_pdf:
+            self.progress_changed.emit(self.current_pdf, page)
+        self.setFocus()
 
     # ------------------------------------------------------------
     # Search (PyMuPDF-based) with highlight
