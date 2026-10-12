@@ -223,6 +223,6 @@ Delete `perf.enabled` to switch logging off again.
 
 ## Not available yet (honest list)
 
-No feature is currently queued — everything designed is in the app today. The one tracked follow-up is **standalone packaging** (an installer so you can run the app without a Python environment).
+No feature is currently queued — everything designed is in the app today. Standalone packaging shipped: see "Running without Python" in the repo `README.md` for the PyInstaller build (`.exe`), though there is no installer yet.
 
 Update this section whenever a feature ships — this guide is a live document (see `AGENTS.md`).

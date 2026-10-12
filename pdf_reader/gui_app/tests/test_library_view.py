@@ -312,6 +312,25 @@ def test_show_library_rebuilds_when_dirty(view, tmp_path, monkeypatch):
     assert view.needs_rebuild() is False  # load_library cleared the flag
 
 
+def test_frozen_build_keeps_db_next_to_exe(tmp_path, monkeypatch, app):
+    """(#118) In a PyInstaller build, user data lands beside the .exe �
+    not inside the _internal/ bundle an upgrade replaces."""
+    import sys as _sys
+
+    fake_exe = tmp_path / "dist" / "pdf_reader" / "pdf_reader.exe"
+    fake_exe.parent.mkdir(parents=True)
+    fake_exe.write_bytes(b"")
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    monkeypatch.setattr(_sys, "executable", str(fake_exe))
+
+    v = LibraryView()  # no db_path seam -> frozen branch
+
+    assert v.db_path == fake_exe.parent / "library.db"
+    assert v.db_path.exists()
+    v.conn.close()
+    v.hide()
+
+
 # ------------------------------------------------------------
 # Zoom memory (#114)
 # ------------------------------------------------------------

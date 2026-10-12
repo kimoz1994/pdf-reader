@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 import sqlite3
+import sys
 from pathlib import Path
 
 from services.extract_store import (
@@ -156,10 +157,15 @@ class LibraryView(QWidget):
         super().__init__()
         
         # `db_path` is a test seam (#72): the app uses the real DB, the
-        # offscreen tests point it at a temp file.
-        self.db_path = Path(db_path) if db_path else (
-            Path(__file__).parent.parent / "library.db"
-        )
+        # offscreen tests point it at a temp file. Frozen builds (#118)
+        # keep user data next to the .exe — `__file__` points inside the
+        # read-only `_internal/` bundle there, which an upgrade replaces.
+        if db_path:
+            self.db_path = Path(db_path)
+        elif getattr(sys, "frozen", False):
+            self.db_path = Path(sys.executable).parent / "library.db"
+        else:
+            self.db_path = Path(__file__).parent.parent / "library.db"
         # Backups live next to the DB (#83); *.db is gitignored so the
         # copies never reach the repo.
         self.backups_dir = self.db_path.parent / "backups"
