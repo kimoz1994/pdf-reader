@@ -585,3 +585,39 @@ def test_filter_composes_with_due_today(app, conn, monkeypatch):
 
     texts = [view.table.item(r, 0).text() for r in range(view.table.rowCount())]
     assert texts == ["Due alpha?"]
+
+
+# ------------------------------------------------------------
+# Study stats strip (#111)
+# ------------------------------------------------------------
+
+
+def test_stats_strip_shows_counts(app, conn, monkeypatch):
+    """(#111 AC) The strip lists total cards, reviews today, due
+    tomorrow, due-in-7-days — and a streak once one exists."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    now = _dt.now(_tz.utc)
+    c1 = create_flashcard(
+        conn, "Q1?", "A", due_utc=(now + timedelta(days=1)).isoformat(timespec="seconds")
+    )
+    create_flashcard(
+        conn, "Q2?", "A", due_utc=(now + timedelta(days=3)).isoformat(timespec="seconds")
+    )
+    record_review(conn, c1, 3, "{}", now + timedelta(hours=1))
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    text = view.stats_label.text()
+    assert view.stats_label.isVisible()
+    assert "2 cards" in text
+    assert "1 reviewed today" in text
+    assert "streak" in text.lower()
+
+
+def test_stats_strip_hidden_when_empty(app, conn, monkeypatch):
+    """(#111) An empty library hides the strip — no floating zeros."""
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    assert not view.stats_label.isVisible()

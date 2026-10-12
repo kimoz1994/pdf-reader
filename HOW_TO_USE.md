@@ -146,6 +146,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
+| Flashcards | See study stats | grey strip under the header: total cards, reviewed today, due tomorrow / next 7 days, and your 🔥 streak |
 | Flashcards | Sort the list | click a column header (Question / Source / Created / Next due) |
 | Flashcards | Find a card fast | type in 🔍 **Search cards…** (question + source name, case-insensitive) — ✕ or empty text clears |
 | Flashcards | Edit a card's question | select the row → **✏️ Edit question** (or `F2`, or right-click → ✏️ Edit question…) |
