@@ -920,6 +920,16 @@ def update_flashcard_question(conn, flashcard_id: int, question: str) -> bool:
     return cur.rowcount > 0
 
 
+def count_flashcards_for_extract(conn, extract_id: int) -> int:
+    """How many flashcards point at this Extract (#108) — the delete
+    confirmation uses it to warn that those cards lose their source link."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM flashcards WHERE extract_id = ?",
+        (extract_id,),
+    ).fetchone()
+    return row[0] if row else 0
+
+
 def backup_database(conn, dest_dir, keep: int = 10) -> Path:
     """Write a consistent snapshot of `conn`'s database into `dest_dir`
     as `library-YYYYMMDD-HHMMSS.db` and prune to the newest `keep`

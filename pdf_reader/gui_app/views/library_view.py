@@ -496,7 +496,12 @@ class LibraryView(QWidget):
         self.load_library()
     
     def add_pdf_to_library(self, file_path: str):
-        """Add a single PDF to database"""
+        """Add a single PDF to database.
+
+        Re-adding a path already in the library updates name/page count
+        only — the row id, read progress and every extract/flashcard
+        keyed to it are preserved (#99).
+        """
         try:
             import fitz
             doc = fitz.open(file_path)
@@ -506,14 +511,24 @@ class LibraryView(QWidget):
             name = Path(file_path).name
             
             self.cursor.execute("""
-                INSERT OR REPLACE INTO pdfs (path, name, total_pages, current_page)
+                INSERT INTO pdfs (path, name, total_pages, current_page)
                 VALUES (?, ?, ?, 1)
+                ON CONFLICT(path) DO UPDATE SET
+                    name = excluded.name,
+                    total_pages = excluded.total_pages
             """, (file_path, name, total_pages))
             
             self.conn.commit()
             
         except Exception as e:
             print(f"Error adding PDF: {e}")
+            self._toast(f"Could not add {Path(file_path).name}: {e}")
+
+    def _toast(self, message: str, timeout: int = 5000):
+        """Status-bar message when embedded in MainWindow; no-op standalone."""
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(message, timeout)
     
     def _delete_key_pressed(self):
         """Del-key handler (#72): silent when nothing is ticked."""
@@ -530,13 +545,17 @@ class LibraryView(QWidget):
         if not self._confirm_removal(names):
             return
 
+        failed = []
         for path in list(self.selected_pdfs):
             try:
                 self.cursor.execute("DELETE FROM pdfs WHERE path = ?", (path,))
             except Exception as e:
                 print(f"Error removing {path}: {e}")
+                failed.append(Path(path).name)
         
         self.conn.commit()
+        if failed:
+            self._toast(f"Could not remove {', '.join(failed)} — see console")
         self.selected_pdfs.clear()
         self.load_library()
 
@@ -658,6 +677,7 @@ class LibraryView(QWidget):
                 self.conn.commit()
             except Exception as e:
                 print(f"Error updating progress: {e}")
+                self._toast("Could not save read progress")
             self._update_row_progress(pdf_path, current_page)
 
     def _update_row_progress(self, pdf_path: str, current_page: int):

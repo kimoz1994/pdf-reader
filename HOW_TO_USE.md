@@ -52,6 +52,8 @@ In the reader:
 | `Enter` / `n` / `N` | with a search active: next / next / previous match (wraps around) |
 | `Esc` | close the search bar (or discard a pending selection) |
 | `+` / `-` | zoom in / out |
+| **Zoom: Fit** (click the label) | snap back to fit-width after zooming |
+| Page box + `Enter` | jump to a page number (type `42`, press Enter — clamped to the document) |
 
 Mouse works too — scroll and click as usual.
 
@@ -71,7 +73,7 @@ Search details: nothing runs while you type — press `Enter` to search, `Enter`
 
 **Capture an image:** just **click** it — the detected image goes yellow, then `e` works the same way.
 
-**Changed your mind?** Press **`Esc`** — the yellow pending marks disappear without saving anything.
+**Changed your mind?** Press **`Esc`** — the yellow pending marks disappear without saving anything. (Going **◀ Back** or closing the app with pending marks asks first, so you don't lose them by accident.)
 
 **Colors, one last time:**
 

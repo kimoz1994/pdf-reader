@@ -90,8 +90,7 @@ MainWindow
 ├── ExtractsView      Documents → Extracts → Captures review + edit + delete
 └── FlashcardsView    card list + FSRS review session: Review (n) → question → reveal → grade 1-4 (Again re-queues, summary)
 
-services/             engine modules (element detection, PDF loading, hints)
-                       — element_detector is live (image click-capture), the rest dormant
+services/             engine module (element detection for image click-capture)
 services/extract_store.py   headless extract/capture/flashcard SQL seam (no Qt), pytest-tested
 services/selection_snapshot.py  editor selection → answer snapshot seam (offscreen Qt), pytest-tested
 services/fsrs_scheduler.py  FSRS scheduling seam over the pinned `fsrs` lib (fuzz on in app, off in tests), pytest-tested
@@ -112,13 +111,11 @@ pdf_reader/
 │   ├── gui_app/
 │   │   ├── main.py           entry point
 │   │   ├── main_window.py    sidebar + view routing
-│   │   ├── sidebar.py
 │   │   ├── services/
 │   │   │   ├── extract_store.py   headless extract/capture/flashcard SQL seam (no Qt)
 │   │   │   ├── selection_snapshot.py  editor selection → answer snapshot (offscreen Qt)
 │   │   │   ├── pdf_geometry.py    Qt-mirroring layout/mapping math
-│   │   │   ├── element_detector.py  live — image click-capture in the reader
-│   │   │   └── (dormant) pdf_loader, hint_generator, hint_overlay, search_engine
+│   │   │   └── element_detector.py  image click-capture in the reader
 │   │   ├── tests/            pytest — full suite in AGENTS.md's Testing section (seams + offscreen Qt views)
 │   │   └── views/
 │   │       ├── library_view.py
@@ -142,7 +139,6 @@ None. The project is developed locally with git-only workflow (feature branches 
 ## Limitations
 
 - The core reader view (`pdf_reader_view.py`) is mostly verified manually — drag→`e`→blue, image click-capture, and `d`-twice delete are checked by hand; only its search behavior (keys/highlight, `test_pdf_search.py`) is pytest-covered. Right-click context menus are a further manual-only corner: offscreen Qt (used by CI) cannot deliver them.
-- The hint system (`services/hint_overlay.py`, `hint_generator.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
 - No packaging/installer yet; requires a Python environment.
 
