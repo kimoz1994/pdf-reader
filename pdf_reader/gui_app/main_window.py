@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         # to update_progress used to run every write twice (the reader also
         # wrote directly before #87 — three writes per page change).
         self.pdf_view.progress_changed.connect(self.on_progress_changed)
+        self.pdf_view.zoom_changed.connect(self.on_zoom_changed)
         self.extracts_view.jump_requested.connect(self.on_extract_jump)
         self.flashcards_view.source_jump_requested.connect(
             self.on_flashcard_source
@@ -479,3 +480,7 @@ class MainWindow(QMainWindow):
 
     def _show_shortcuts(self):
         HelpDialog(self).exec()
+
+    def on_zoom_changed(self, pdf_path: str, mode: str, factor: float):
+        """Persist the reader's zoom for this document (#114)."""
+        self.library_view.update_zoom(pdf_path, mode, factor)

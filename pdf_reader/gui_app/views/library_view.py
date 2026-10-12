@@ -5,14 +5,15 @@ Library View - Fast, professional with responsive layout
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QAbstractItemView, QFileDialog,
-    QProgressBar, QFrame, QMenu, QMessageBox, QScrollArea, QCheckBox
+    QProgressBar, QFrame, QMenu, QMessageBox, QScrollArea, QCheckBox,
+    QInputDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 import sqlite3
 from pathlib import Path
 
-from services.extract_store import backup_database
+from services.extract_store import backup_database, restore_database
 from services.perf_log import span as perf_span, log_since as perf_log_since
 
 # Removal toolbar (#72): label base for the button; `_sync_removal_ui`
@@ -180,6 +181,13 @@ class LibraryView(QWidget):
                 last_opened TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # #114: per-document zoom memory. Older DBs get the columns
+        # backfilled with NULL → first open after upgrade stays Fit.
+        cols = {r[1] for r in self.cursor.execute("PRAGMA table_info(pdfs)")}
+        if "zoom_mode" not in cols:
+            self.cursor.execute("ALTER TABLE pdfs ADD COLUMN zoom_mode TEXT")
+        if "zoom_factor" not in cols:
+            self.cursor.execute("ALTER TABLE pdfs ADD COLUMN zoom_factor REAL")
         self.conn.commit()
     
     def setup_ui(self):
@@ -277,6 +285,25 @@ class LibraryView(QWidget):
         """)
         self.backup_btn.clicked.connect(self._backup_library)
         buttons_layout.addWidget(self.backup_btn)
+
+        # The missing half of Backup (#109): load a snapshot from backups/.
+        self.restore_btn = QPushButton("♻️ Restore")
+        self.restore_btn.setFixedHeight(45)
+        self.restore_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #8e44ad;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #9b59b6;
+            }
+        """)
+        self.restore_btn.clicked.connect(self._restore_library)
+        buttons_layout.addWidget(self.restore_btn)
 
         layout.addLayout(buttons_layout)
         
@@ -476,7 +503,12 @@ class LibraryView(QWidget):
         self.load_library()
     
     def add_pdf_to_library(self, file_path: str):
-        """Add a single PDF to database"""
+        """Add a single PDF to database.
+
+        Re-adding a path already in the library updates name/page count
+        only — the row id, read progress and every extract/flashcard
+        keyed to it are preserved (#99).
+        """
         try:
             import fitz
             doc = fitz.open(file_path)
@@ -486,14 +518,24 @@ class LibraryView(QWidget):
             name = Path(file_path).name
             
             self.cursor.execute("""
-                INSERT OR REPLACE INTO pdfs (path, name, total_pages, current_page)
+                INSERT INTO pdfs (path, name, total_pages, current_page)
                 VALUES (?, ?, ?, 1)
+                ON CONFLICT(path) DO UPDATE SET
+                    name = excluded.name,
+                    total_pages = excluded.total_pages
             """, (file_path, name, total_pages))
             
             self.conn.commit()
             
         except Exception as e:
             print(f"Error adding PDF: {e}")
+            self._toast(f"Could not add {Path(file_path).name}: {e}")
+
+    def _toast(self, message: str, timeout: int = 5000):
+        """Status-bar message when embedded in MainWindow; no-op standalone."""
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(message, timeout)
     
     def _delete_key_pressed(self):
         """Del-key handler (#72): silent when nothing is ticked."""
@@ -510,13 +552,17 @@ class LibraryView(QWidget):
         if not self._confirm_removal(names):
             return
 
+        failed = []
         for path in list(self.selected_pdfs):
             try:
                 self.cursor.execute("DELETE FROM pdfs WHERE path = ?", (path,))
             except Exception as e:
                 print(f"Error removing {path}: {e}")
+                failed.append(Path(path).name)
         
         self.conn.commit()
+        if failed:
+            self._toast(f"Could not remove {', '.join(failed)} — see console")
         self.selected_pdfs.clear()
         self.load_library()
 
@@ -560,6 +606,71 @@ class LibraryView(QWidget):
             "and study schedule.",
         )
 
+    def _list_backup_files(self):
+        """Snapshots in backups/, newest first (#109)."""
+        if not self.backups_dir.exists():
+            return []
+        return sorted(
+            self.backups_dir.glob("library-*.db"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+    def _restore_library(self):
+        """♻️ Restore: pick a snapshot from backups/, confirm, and replace
+        the live library's content in place (#109)."""
+        backups = self._list_backup_files()
+        if not backups:
+            QMessageBox.information(
+                self,
+                "Restore backup",
+                "No backups found yet.\n\n"
+                "Click 💾 Backup first to create one.",
+            )
+            return
+        names = [p.name for p in backups]
+        name, ok = QInputDialog.getItem(
+            self,
+            "Restore backup",
+            "Choose a snapshot (newest first):",
+            names,
+            0,
+            False,
+        )
+        if not ok or not name:
+            return
+        chosen = self.backups_dir / name
+        reply = QMessageBox.question(
+            self,
+            "Restore backup",
+            f"Replace the current library with\n{name}?\n\n"
+            "Your current extracts, flashcards and reading progress "
+            "will be replaced by the snapshot.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            restore_database(self.conn, chosen)
+        except Exception as e:
+            print(f"Error restoring backup: {e}")
+            QMessageBox.critical(
+                self,
+                "Restore failed",
+                f"Could not restore from {name}:\n{e}",
+            )
+            return
+        self.selected_pdfs.clear()
+        self._structural_dirty = True
+        self.load_library()
+        QMessageBox.information(
+            self,
+            "Restore backup",
+            f"Restored from {name}.\n\n"
+            "Open Extracts or Flashcards to see the restored data.",
+        )
+
     def update_progress(self, pdf_path: str, current_page: int):
         """Persist progress and refresh the row in place (#89): one label
         update instead of tearing down every row on the next Back."""
@@ -573,7 +684,22 @@ class LibraryView(QWidget):
                 self.conn.commit()
             except Exception as e:
                 print(f"Error updating progress: {e}")
+                self._toast("Could not save read progress")
             self._update_row_progress(pdf_path, current_page)
+
+    def update_zoom(self, pdf_path: str, zoom_mode: str, zoom_factor: float):
+        """Persist the reader's zoom for one document (#114): 'fit' or
+        'custom' plus the factor (ignored for fit). Reopen restores it;
+        a first open (NULL columns) stays Fit."""
+        try:
+            self.cursor.execute("""
+                UPDATE pdfs
+                SET zoom_mode = ?, zoom_factor = ?
+                WHERE path = ?
+            """, (zoom_mode, zoom_factor, pdf_path))
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error updating zoom: {e}")
 
     def _update_row_progress(self, pdf_path: str, current_page: int):
         """Find the row for `pdf_path` and sync its widget + item data —

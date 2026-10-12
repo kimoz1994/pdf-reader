@@ -489,3 +489,135 @@ def test_source_click_column_guard(app, conn, monkeypatch):
         view.table.cellClicked.emit(row, col)
 
     assert hits == []
+
+
+# ------------------------------------------------------------
+# Sort + search (#110)
+# ------------------------------------------------------------
+
+
+def test_table_is_sortable(app, conn, monkeypatch):
+    """(#110 AC) Header clicks sort the card list."""
+    create_flashcard(conn, "B-question", "A")
+    create_flashcard(conn, "A-question", "B")
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    assert view.table.isSortingEnabled()
+    view.table.sortItems(0, Qt.SortOrder.AscendingOrder)
+    texts = [view.table.item(r, 0).text() for r in range(view.table.rowCount())]
+    assert texts == ["A-question", "B-question"]
+
+
+def test_filter_narrows_to_matching_cards(app, conn, monkeypatch):
+    """(#110 AC) Typing in the search box keeps only rows whose question
+    or source name contains the text (case-insensitive)."""
+    create_flashcard(conn, "What is a buffer?", "A")
+    create_flashcard(conn, "Define cache", "B")
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    view.filter_input.setText("buffer")
+
+    texts = [view.table.item(r, 0).text() for r in range(view.table.rowCount())]
+    assert texts == ["What is a buffer?"]
+
+
+def test_filter_matches_source_name(app, conn, monkeypatch):
+    """(#110) The search also covers the source Document name."""
+    seed_sourced_card(conn, "From book?")
+    create_flashcard(conn, "Untied?", "A")
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    view.filter_input.setText("book")
+
+    texts = [view.table.item(r, 0).text() for r in range(view.table.rowCount())]
+    assert texts == ["From book?"]
+
+
+def test_filter_empty_shows_no_match_message(app, conn, monkeypatch):
+    """(#110) A filter with zero hits hides the table and says so —
+    not a silent empty box."""
+    create_flashcard(conn, "Visible?", "A")
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    view.filter_input.setText("zzz-no-such-card")
+
+    assert not view.table.isVisible()
+    assert view.empty_label.isVisible()
+    assert "no cards match" in view.empty_label.text().lower()
+
+
+def test_clearing_filter_restores_the_list(app, conn, monkeypatch):
+    """(#110) Emptying the search box brings every card back."""
+    create_flashcard(conn, "One", "A")
+    create_flashcard(conn, "Two", "B")
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    view.filter_input.setText("one")
+    assert view.table.rowCount() == 1
+    view.filter_input.setText("")
+
+    assert view.table.rowCount() == 2
+    assert view.table.isVisible()
+
+
+def test_filter_composes_with_due_today(app, conn, monkeypatch):
+    """(#110) Search applies *on top of* the 📅 Due today filter —
+    both must match for a row to show."""
+    now = datetime.now(timezone.utc)
+    cutoff = end_of_local_day_utc()
+    create_flashcard(
+        conn, "Due alpha?", "A", due_utc=_iso(now - timedelta(hours=1))
+    )
+    create_flashcard(conn, "Due beta?", "B", due_utc=_iso(cutoff))
+    create_flashcard(
+        conn, "Someday alpha?", "C", due_utc=_iso(cutoff + timedelta(days=7))
+    )
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    view.due_toggle.setChecked(True)  # due-only
+    view.filter_input.setText("alpha")  # …and alpha
+
+    texts = [view.table.item(r, 0).text() for r in range(view.table.rowCount())]
+    assert texts == ["Due alpha?"]
+
+
+# ------------------------------------------------------------
+# Study stats strip (#111)
+# ------------------------------------------------------------
+
+
+def test_stats_strip_shows_counts(app, conn, monkeypatch):
+    """(#111 AC) The strip lists total cards, reviews today, due
+    tomorrow, due-in-7-days — and a streak once one exists."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    now = _dt.now(_tz.utc)
+    c1 = create_flashcard(
+        conn, "Q1?", "A", due_utc=(now + timedelta(days=1)).isoformat(timespec="seconds")
+    )
+    create_flashcard(
+        conn, "Q2?", "A", due_utc=(now + timedelta(days=3)).isoformat(timespec="seconds")
+    )
+    record_review(conn, c1, 3, "{}", now + timedelta(hours=1))
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    text = view.stats_label.text()
+    assert view.stats_label.isVisible()
+    assert "2 cards" in text
+    assert "1 reviewed today" in text
+    assert "streak" in text.lower()
+
+
+def test_stats_strip_hidden_when_empty(app, conn, monkeypatch):
+    """(#111) An empty library hides the strip — no floating zeros."""
+    view = make_view(conn, monkeypatch)
+    view.show()
+
+    assert not view.stats_label.isVisible()
