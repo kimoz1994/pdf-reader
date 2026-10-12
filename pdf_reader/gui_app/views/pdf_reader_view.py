@@ -11,6 +11,10 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QFrame,
     QDialog,
+    QInputDialog,
+    QMessageBox,
+    QTreeWidget,
+    QTreeWidgetItem,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -114,10 +118,11 @@ class HelpDialog(QDialog):
             ("Backspace", "Navigation", "Page up"),
             ("+ / =", "Zoom", "Zoom in"),
             ("-", "Zoom", "Zoom out"),
+            ("Zoom: Fit (click)", "Zoom", "Restore fit-width zoom"),
+            ("Page input + Enter", "Navigation", "Jump to a page number"),
             ("/", "Search", "Open search bar (again = refocus the input)"),
             ("Enter", "Search", "Run search and jump to the first match; again = next match"),
             ("Esc", "Search", "Close search (n/N become page navigation again)"),
-            ("h", "Hints", "Enter hint mode"),
             ("e", "Extract", "Commit the Working Set as one Extract"),
             ("Esc", "Extract", "Clear the Working Set (yellow highlights)"),
             ("Drag mouse", "Extract", "Select text into the Working Set"),
@@ -256,7 +261,7 @@ _CAPTURE_SCALE = 2.0
 class PDFReaderView(QWidget):
     back_requested = pyqtSignal()
     progress_changed = pyqtSignal(str, int)
-    hint_mode_requested = pyqtSignal()
+    zoom_changed = pyqtSignal(str, str, float)  # path, mode, factor (#114)
 
     def __init__(self):
         super().__init__()
@@ -318,11 +323,17 @@ class PDFReaderView(QWidget):
         self.zoom_out_btn.clicked.connect(self.zoom_out)
         toolbar.addWidget(self.zoom_out_btn)
 
-        self.zoom_label = QLabel("Zoom: Fit")
-        self.zoom_label.setStyleSheet(
-            "color:white;font-size:14px;"
+        # Clickable Fit indicator (#105): shows the current zoom mode and
+        # restores FitToWidth when clicked (there was no way back after +/-).
+        self.zoom_fit_btn = QPushButton("Zoom: Fit")
+        self.zoom_fit_btn.setFixedHeight(35)
+        self.zoom_fit_btn.setStyleSheet(
+            "color:white;font-size:14px;background:transparent;"
+            "border:1px solid #555;padding:0 8px;"
         )
-        toolbar.addWidget(self.zoom_label)
+        self.zoom_fit_btn.clicked.connect(self.zoom_fit)
+        self.zoom_fit_btn.setToolTip("Restore fit-width zoom")
+        toolbar.addWidget(self.zoom_fit_btn)
 
         self.zoom_in_btn = QPushButton("🔍 +")
         self.zoom_in_btn.setFixedHeight(35)
@@ -335,11 +346,24 @@ class PDFReaderView(QWidget):
         self.prev_btn.setEnabled(False)
         toolbar.addWidget(self.prev_btn)
 
-        self.page_label = QLabel("Page: -")
-        self.page_label.setStyleSheet(
+        # Editable go-to-page (#106): type a number + Enter.
+        self.page_input = QLineEdit()
+        self.page_input.setFixedWidth(50)
+        self.page_input.setFixedHeight(35)
+        self.page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_input.setStyleSheet(
+            "color:white;font-size:14px;background:#3a3a3a;"
+            "border:1px solid #555;border-radius:3px;"
+        )
+        self.page_input.returnPressed.connect(self._goto_page_from_input)
+        self.page_input.setToolTip("Page number — type and press Enter")
+        toolbar.addWidget(self.page_input)
+
+        self.page_total_label = QLabel("/ -")
+        self.page_total_label.setStyleSheet(
             "color:white;font-size:14px;"
         )
-        toolbar.addWidget(self.page_label)
+        toolbar.addWidget(self.page_total_label)
 
         self.next_btn = QPushButton("Next ▶")
         self.next_btn.setFixedHeight(35)
@@ -352,6 +376,16 @@ class PDFReaderView(QWidget):
             "color:#f1c40f;font-size:13px;font-weight:bold;"
         )
         toolbar.addWidget(self.working_label)
+
+        # TOC toggle (#113): checkable, disabled while the loaded
+        # document has no outline.
+        self.toc_toggle = QPushButton("📑 Contents")
+        self.toc_toggle.setCheckable(True)
+        self.toc_toggle.setChecked(True)
+        self.toc_toggle.setFixedHeight(35)
+        self.toc_toggle.setToolTip("Show/hide the document outline")
+        self.toc_toggle.toggled.connect(self._toggle_toc)
+        toolbar.addWidget(self.toc_toggle)
 
         toolbar.addStretch()
         layout.addLayout(toolbar)
@@ -375,7 +409,35 @@ class PDFReaderView(QWidget):
         except Exception:
             pass
 
-        layout.addWidget(self.pdf_view)
+        # TOC side panel (#113): collapsible outline tree to the left of
+        # the viewer. Hidden while the document has no outline.
+        self.toc_panel = QFrame(self)
+        self.toc_panel.setObjectName("tocPanel")
+        self.toc_panel.setFixedWidth(230)
+        self.toc_panel.setStyleSheet(
+            "QFrame#tocPanel { background:#232323; border-right:1px solid #3a3a3a; }"
+        )
+        toc_layout = QVBoxLayout(self.toc_panel)
+        toc_layout.setContentsMargins(6, 6, 6, 6)
+        toc_header = QLabel("Contents")
+        toc_header.setStyleSheet("color:#bbbbbb;font-size:12px;font-weight:bold;")
+        toc_layout.addWidget(toc_header)
+        self.toc_tree = QTreeWidget(self.toc_panel)
+        self.toc_tree.setHeaderHidden(True)
+        self.toc_tree.setStyleSheet(
+            "QTreeWidget { background:transparent; border:none; color:#dddddd; }"
+            "QTreeWidget::item:selected { background:#3d5a80; color:white; }"
+        )
+        self.toc_tree.itemClicked.connect(self._on_toc_item_clicked)
+        toc_layout.addWidget(self.toc_tree)
+        self.toc_panel.hide()
+
+        viewer_row = QHBoxLayout()
+        viewer_row.setContentsMargins(0, 0, 0, 0)
+        viewer_row.setSpacing(0)
+        viewer_row.addWidget(self.toc_panel)
+        viewer_row.addWidget(self.pdf_view)
+        layout.addLayout(viewer_row)
 
         # Overlay for highlights
         self.highlight_overlay = SearchHighlightOverlay(self)
@@ -564,6 +626,12 @@ class PDFReaderView(QWidget):
                     self._loading_document = False
             return
 
+        # Encrypted PDF (#116): probe + prompt BEFORE tearing down the
+        # old doc — cancel must leave the previous document intact.
+        password = self._prompt_password(pdf_path)
+        if password is None:
+            return
+
         # Clear existing document
         _t0 = time.perf_counter()
         self._loading_document = True
@@ -592,11 +660,20 @@ class PDFReaderView(QWidget):
 
             with perf_span("load_pdf: doc.load"):
                 self.doc = QPdfDocument(self)
+                if password:
+                    self.doc.setPassword(password)
                 self.doc.load(pdf_path)
                 count = self.doc.pageCount()
             if count <= 0:
                 print(f"Could not load PDF: {pdf_path}")
                 self.doc = None
+                QMessageBox.warning(
+                    self,
+                    "Cannot open PDF",
+                    f"Could not open:\n{pdf_path}\n\n"
+                    "The file may be corrupt, password-protected, "
+                    "or not a valid PDF.",
+                )
                 return
 
             saved_page = min(saved_page, count - 1)
@@ -605,8 +682,18 @@ class PDFReaderView(QWidget):
                 self.pdf_view.setDocument(self.doc)
             with perf_span("load_pdf: pageMode+zoomMode"):
                 self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
-                self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
-            self.zoom_label.setText("Zoom: Fit")
+                # #114: restore this document's saved zoom; first open
+                # (NULL / missing columns) stays Fit.
+                saved_mode, saved_factor = self._saved_zoom_for(pdf_path)
+                if saved_mode == "custom" and saved_factor:
+                    self.pdf_view.setZoomMode(QPdfView.ZoomMode.Custom)
+                    self.pdf_view.setZoomFactor(float(saved_factor))
+                    self.zoom_fit_btn.setText(
+                        f"Zoom: {int(float(saved_factor) * 100)}%"
+                    )
+                else:
+                    self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+                    self.zoom_fit_btn.setText("Zoom: Fit")
 
             # Blue extracts load exactly once per open (#88): in
             # show_pdf_view -> reload_extract_captures, not here too.
@@ -618,6 +705,109 @@ class PDFReaderView(QWidget):
         finally:
             self._loading_document = False
             perf_log("load_pdf total", (time.perf_counter() - _t0) * 1000.0)
+            # TOC tracks the loaded document (#113) — populated after a
+            # successful load, cleared on failure (panel hides itself).
+            if self.doc is not None and self.doc.pageCount() > 0:
+                self._populate_toc(pdf_path)
+            else:
+                self._populate_toc(None)
+
+    def _populate_toc(self, pdf_path):
+        """(#113) Fill the outline panel from PyMuPDF's get_toc().
+
+        `pdf_path=None` clears the tree. A document without an outline
+        hides the panel and disables the toggle (AC: no empty box)."""
+        self.toc_tree.clear()
+        entries = []
+        if pdf_path:
+            try:
+                with pymupdf.open(pdf_path) as probe:
+                    entries = probe.get_toc() or []
+            except Exception:
+                entries = []
+
+        for level, title, page in entries:
+            item = QTreeWidgetItem([str(title)])
+            item.setData(0, Qt.ItemDataRole.UserRole, int(page))
+            if level <= 1 or self.toc_tree.topLevelItemCount() == 0:
+                self.toc_tree.addTopLevelItem(item)
+            else:
+                parent = self.toc_tree.topLevelItem(
+                    self.toc_tree.topLevelItemCount() - 1
+                )
+                parent.addChild(item)
+            if level > 1:
+                item.setFirstColumnSpanned(True)
+
+        self.toc_tree.expandAll()
+        if entries:
+            self.toc_toggle.setEnabled(True)
+            self.toc_toggle.setChecked(True)
+            self.toc_panel.show()
+        else:
+            self.toc_toggle.setEnabled(False)
+            self.toc_toggle.setChecked(False)
+            self.toc_panel.hide()
+
+    def _toggle_toc(self, checked: bool):
+        """(#113) Toolbar toggle collapses/expands the panel."""
+        if not self.toc_toggle.isEnabled():
+            return
+        self.toc_panel.setVisible(checked)
+
+    def _on_toc_item_clicked(self, item: QTreeWidgetItem, _column: int):
+        """(#113 AC) Click an outline entry -> jump to that page."""
+        if self.doc is None:
+            return
+        count = self.doc.pageCount()
+        if count <= 0:
+            return
+        page = item.data(0, Qt.ItemDataRole.UserRole)
+        if page is None:
+            return
+        target = max(0, min(int(page) - 1, count - 1))
+        self._jump_to_saved_page(target, count)
+
+    def _prompt_password(self, pdf_path: str):
+        """(#116) The password for `pdf_path`, '' when it needs none,
+        or None when the user cancelled.
+
+        Probes with pymupdf BEFORE `load_pdf` tears down the old
+        document — cancel therefore leaves the previous document
+        intact. A wrong password shows a clear warning and re-prompts
+        (same loop) instead of failing later with a blank viewer.
+        """
+        try:
+            probe = pymupdf.open(pdf_path)
+        except Exception:
+            # Unreadable/corrupt file: not a password problem — let the
+            # normal load path report it.
+            return ""
+        try:
+            if not probe.needs_pass:
+                return ""
+            # Empty user password: opens silently, no prompt needed.
+            if probe.authenticate(""):
+                return ""
+            while True:
+                pw, ok = QInputDialog.getText(
+                    self,
+                    "Password required",
+                    "This PDF is encrypted. Enter its password:",
+                    QLineEdit.EchoMode.Password,
+                )
+                if not ok:
+                    return None  # cancel — previous doc untouched
+                if pw and probe.authenticate(pw):
+                    return pw
+                QMessageBox.warning(
+                    self,
+                    "Incorrect password",
+                    "That password did not open this PDF. Try again "
+                    "or cancel.",
+                )
+        finally:
+            probe.close()
 
     def _saved_page_for(self, pdf_path: str) -> int:
         """Saved 0-based page from the library DB, 0 when unknown."""
@@ -636,6 +826,24 @@ class PDFReaderView(QWidget):
             print(f"Error restoring saved page: {e}")
         return 0
 
+    def _saved_zoom_for(self, pdf_path: str):
+        """Saved (mode, factor) from the library DB; (None, None) when
+        unknown — first open stays Fit (#114)."""
+        try:
+            main_window = self.window()
+            if hasattr(main_window, "library_view"):
+                library_view = main_window.library_view
+                library_view.cursor.execute(
+                    "SELECT zoom_mode, zoom_factor FROM pdfs WHERE path = ?",
+                    (pdf_path,),
+                )
+                row = library_view.cursor.fetchone()
+                if row:
+                    return row[0], row[1]
+        except Exception as e:
+            print(f"Error restoring saved zoom: {e}")
+        return None, None
+
     def _jump_to_saved_page(self, saved_page: int, count: int):
         """Jump the navigator to `saved_page` and sync everything that
         follows — shared by the full load and the reopen fast path (#94):
@@ -646,9 +854,7 @@ class PDFReaderView(QWidget):
             )
 
         self.last_visible_page = saved_page
-        self.page_label.setText(
-            f"Page: {saved_page + 1}/{count}"
-        )
+        self._sync_page_display(saved_page, count)
         self.prev_btn.setEnabled(saved_page > 0)
         self.next_btn.setEnabled(saved_page < count - 1)
 
@@ -670,9 +876,7 @@ class PDFReaderView(QWidget):
 
         self.last_visible_page = page_index
         count = self.doc.pageCount()
-        self.page_label.setText(
-            f"Page: {page_index + 1}/{count}"
-        )
+        self._sync_page_display(page_index, count)
         self.prev_btn.setEnabled(page_index > 0)
         self.next_btn.setEnabled(page_index < count - 1)
 
@@ -848,13 +1052,6 @@ class PDFReaderView(QWidget):
             return
 
         # Normal viewer mode (search bar not visible)
-        # Hint mode trigger (kept below the search branch so 'h' types
-        # into the search input while the bar is open, #75)
-        if key == Qt.Key.Key_H and modifiers == Qt.KeyboardModifier.NoModifier:
-            self.hint_mode_requested.emit()
-            event.accept()
-            return
-
         if (
             key == Qt.Key.Key_D
             and modifiers == Qt.KeyboardModifier.NoModifier
@@ -1007,9 +1204,10 @@ class PDFReaderView(QWidget):
         current = self.pdf_view.zoomFactor()
         new = min(5.0, current + 0.25)
         self.pdf_view.setZoomFactor(new)
-        self.zoom_label.setText(
+        self.zoom_fit_btn.setText(
             f"Zoom: {int(new * 100)}%"
         )
+        self._persist_zoom("custom", new)
         self._refresh_highlights()
 
     def zoom_out(self):
@@ -1017,10 +1215,60 @@ class PDFReaderView(QWidget):
         current = self.pdf_view.zoomFactor()
         new = max(0.25, current - 0.25)
         self.pdf_view.setZoomFactor(new)
-        self.zoom_label.setText(
+        self.zoom_fit_btn.setText(
             f"Zoom: {int(new * 100)}%"
         )
+        self._persist_zoom("custom", new)
         self._refresh_highlights()
+
+    def _persist_zoom(self, mode: str, factor: float):
+        """(#114) Emit the zoom for this document so MainWindow can
+        write it through library_view.update_zoom — same single-path
+        pattern as progress_changed."""
+        if self.current_pdf and not self._loading_document:
+            self.zoom_changed.emit(self.current_pdf, mode, factor)
+
+    def zoom_fit(self):
+        """Restore FitToWidth (#105) — the way back after +/- zoom."""
+        self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        self.zoom_fit_btn.setText("Zoom: Fit")
+        self._refresh_highlights()
+
+    # ------------------------------------------------------------
+    # Go to page (#106)
+    # ------------------------------------------------------------
+
+    def _sync_page_display(self, page_index: int, count: int):
+        """Refresh the page input + total — skipped while the user is
+        typing in the input so a scroll event can't clobber an edit."""
+        if self.page_input.hasFocus():
+            return
+        self.page_input.setText(str(page_index + 1))
+        self.page_total_label.setText(f"/ {count}")
+
+    def _goto_page_from_input(self):
+        """Enter in the page input: jump to the typed page, clamped."""
+        if self.doc is None:
+            return
+        count = self.doc.pageCount()
+        if count <= 0:
+            return
+        try:
+            page = int(self.page_input.text().strip())
+        except ValueError:
+            page = self.last_visible_page + 1
+        page = max(1, min(count, page))
+        self.pdf_view.pageNavigator().jump(
+            page - 1, QPointF(0.0, 0.0), 0.0
+        )
+        self.last_visible_page = page - 1
+        self.page_input.setText(str(page))
+        self.page_total_label.setText(f"/ {count}")
+        self.prev_btn.setEnabled(page > 1)
+        self.next_btn.setEnabled(page < count)
+        if self.current_pdf:
+            self.progress_changed.emit(self.current_pdf, page)
+        self.setFocus()
 
     # ------------------------------------------------------------
     # Search (PyMuPDF-based) with highlight
@@ -1086,6 +1334,7 @@ class PDFReaderView(QWidget):
         except Exception as e:
             print(f"Search error: {e}")
             self.search_matches = []
+            self._toast("Search failed")
 
         self.current_result_index = -1
         if self.search_matches:
@@ -1174,6 +1423,12 @@ class PDFReaderView(QWidget):
         if hasattr(main_window, "db_conn"):
             return main_window.db_conn()
         return None
+
+    def _toast(self, message: str, timeout: int = 5000):
+        """Status-bar message when embedded in MainWindow; no-op standalone."""
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(message, timeout)
 
     def _current_doc_id(self):
         conn = self._db_conn()
@@ -1311,6 +1566,11 @@ class PDFReaderView(QWidget):
         conn = self._db_conn()
         doc_id = self._current_doc_id()
         if conn is None or doc_id is None:
+            # The PDF row is gone (removed from the library while open):
+            # say so and keep the pending selections, not a silent no-op (#102).
+            self.working_label.setText(
+                "Could not save — PDF is not in the library"
+            )
             return
         store_commit_working_set(conn, doc_id, self.working_set)
         self.working_set = []
@@ -1464,6 +1724,9 @@ class PDFReaderView(QWidget):
     # ------------------------------------------------------------
 
     def closeEvent(self, event):
+        if self.working_set and not self._confirm_discard_working_set():
+            event.ignore()
+            return
         self._reset_extract_state()
         self._loading_document = True
         # No setDocument(None) here either (see load_pdf): closing the doc
@@ -1477,7 +1740,23 @@ class PDFReaderView(QWidget):
         self._loading_document = False
         event.accept()
 
+    def _confirm_discard_working_set(self) -> bool:
+        """Ask before dropping pending yellow selections on Back / close
+        (#107). Esc stays an immediate discard — that is an explicit act."""
+        n = len(self.working_set)
+        reply = QMessageBox.question(
+            self,
+            "Unsaved selections",
+            f"Discard {n} pending selection{'s' if n != 1 else ''}?\n\n"
+            "These highlights have not been saved as an Extract yet.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     def go_back(self):
+        if self.working_set and not self._confirm_discard_working_set():
+            return
         with perf_span("reader.go_back"):
             # Click instant; LibraryView.paintEvent logs the perceived
             # latency when the library's first paint lands.

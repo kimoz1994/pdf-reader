@@ -232,7 +232,8 @@ def test_reopen_same_pdf_reuses_loaded_document(view, app, fixture_pdf):
         "exactly one progress emission (no library -> saved page 1)"
     )
     assert view.last_visible_page == 0
-    assert view.page_label.text() == "Page: 1/2"
+    assert view.page_input.text() == "1"
+    assert view.page_total_label.text() == "/ 2"
 
 
 def test_open_different_pdf_takes_the_full_path(view, app, fixture_pdf, tmp_path):
@@ -256,3 +257,102 @@ def test_open_different_pdf_takes_the_full_path(view, app, fixture_pdf, tmp_path
     assert view.doc is not second_doc, "switching back must also reload"
     assert view.doc is not first_doc, "a fresh object, not the recycled one"
     assert view.current_pdf == fixture_pdf
+
+
+# ------------------------------------------------------------
+# Zoom memory (#114)
+# ------------------------------------------------------------
+
+
+class _StubLib:
+    """Minimal library_view stand-in: just a cursor over a temp DB."""
+
+    def __init__(self, conn):
+        self.cursor = conn.cursor()
+
+
+def _win_with_lib(view, conn):
+    from main_window import MainWindow
+
+    win = MainWindow.__new__(MainWindow)
+    win.library_view = _StubLib(conn)
+    # Bypass QWidget.window() plumbing by faking it on the view.
+    view.window = lambda: win
+    return win
+
+
+def test_zoom_in_emits_zoom_changed(view, app):
+    """(#114) Zooming in emits (path, 'custom', factor) for persistence."""
+    hits = []
+    view.zoom_changed.connect(lambda *a: hits.append(a))
+
+    view.zoom_in()
+
+    assert hits, "no zoom_changed emission"
+    path, mode, factor = hits[0]
+    assert path == view.current_pdf
+    assert mode == "custom"
+    assert factor == view.pdf_view.zoomFactor()
+
+
+def test_saved_zoom_restored_on_open(view, app, fixture_pdf, tmp_path):
+    """(#114 AC) A document saved at custom 150% reopens at 150%, not Fit."""
+    import sqlite3
+
+    conn = sqlite3.connect(tmp_path / "lib.db")
+    conn.execute(
+        """
+        CREATE TABLE pdfs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            zoom_mode TEXT,
+            zoom_factor REAL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO pdfs (path, name, zoom_mode, zoom_factor) VALUES (?, ?, ?, ?)",
+        (fixture_pdf, "fixture.pdf", "custom", 1.5),
+    )
+    conn.commit()
+    _win_with_lib(view, conn)
+    # Force the full load path — the #94 reopen fast path intentionally
+    # keeps the live view (zoom already correct on a same-doc reopen).
+    view.current_pdf = None
+
+    view.load_pdf(fixture_pdf)
+    app.processEvents()
+
+    assert view.pdf_view.zoomMode().name == "Custom"
+    assert abs(view.pdf_view.zoomFactor() - 1.5) < 1e-6
+    assert "150%" in view.zoom_fit_btn.text()
+    conn.close()
+
+
+def test_first_open_stays_fit(view, app, fixture_pdf):
+    """(#114) No saved zoom (NULL columns / missing row) → Fit."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE pdfs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            zoom_mode TEXT,
+            zoom_factor REAL
+        )
+        """
+    )
+    conn.commit()
+    _win_with_lib(view, conn)
+    view.current_pdf = None  # full load path, not the #94 reopen fast path
+
+    view.load_pdf(fixture_pdf)
+    app.processEvents()
+
+    assert view.pdf_view.zoomMode().name == "FitToWidth"
+    assert "Fit" in view.zoom_fit_btn.text()
+    conn.close()

@@ -37,7 +37,7 @@ We'll use the bundled sample `test.pdf` so you don't need your own file (or add 
 3. Click it (or press **`Delete`** with the list focused) and confirm: the dialog lists the ticked names behind **Show details** and reminds you the files themselves are untouched.
 4. A file you moved or deleted elsewhere no longer vanishes from the list — it stays marked **⚠ file missing** in orange, so you can tick and remove it like any other row (double-clicking it explains it can't be opened).
 
-**Back up your study data**: your Extracts, flashcards and study schedule all live in one file (`library.db`). Click **💾 Backup** in the Library header any time — it saves a consistent copy to the `backups/` folder next to the app, named with the date and time (e.g. `library-20261011-143000.db`), and tells you exactly where it went. Keep a copy somewhere safe (another drive, cloud folder). Old backups are trimmed automatically to the newest 10.
+**Back up your study data**: your Extracts, flashcards and study schedule all live in one file (`library.db`). Click **💾 Backup** in the Library header any time — it saves a consistent copy to the `backups/` folder next to the app, named with the date and time (e.g. `library-20261011-143000.db`), and tells you exactly where it went. Keep a copy somewhere safe (another drive, cloud folder). Old backups are trimmed automatically to the newest 10. **♻️ Restore** (next to Backup) loads one of those snapshots back: pick the snapshot, confirm, and your library is replaced in place — open Extracts or Flashcards to see the restored data. Restore asks before overwriting, so a misclick can't destroy anything.
 
 ### 2. Navigate like a pro (keyboard-first)
 
@@ -52,6 +52,8 @@ In the reader:
 | `Enter` / `n` / `N` | with a search active: next / next / previous match (wraps around) |
 | `Esc` | close the search bar (or discard a pending selection) |
 | `+` / `-` | zoom in / out |
+| **Zoom: Fit** (click the label) | snap back to fit-width after zooming |
+| Page box + `Enter` | jump to a page number (type `42`, press Enter — clamped to the document) |
 
 Mouse works too — scroll and click as usual.
 
@@ -71,7 +73,7 @@ Search details: nothing runs while you type — press `Enter` to search, `Enter`
 
 **Capture an image:** just **click** it — the detected image goes yellow, then `e` works the same way.
 
-**Changed your mind?** Press **`Esc`** — the yellow pending marks disappear without saving anything.
+**Changed your mind?** Press **`Esc`** — the yellow pending marks disappear without saving anything. (Going **◀ Back** or closing the app with pending marks asks first, so you don't lose them by accident.)
 
 **Colors, one last time:**
 
@@ -137,6 +139,7 @@ Everything — your library, your read position, your blue extracts — lives in
 | Reader | Discard pending selection(s) | `Esc` |
 | Reader | Delete newest Extract on this page | `d` `d` |
 | Reader | Navigate / search / zoom | `j` `k` `gg` `G` `Space` `/` `Enter` `n` `N` `Esc` `+` `-` |
+| Reader | Show/hide the document outline | **📑 Contents** toggle (left panel) — click an entry to jump to that page; disabled when the PDF has no outline |
 | Extracts view | Read / edit an Extract | select row → `Enter` / double-click → type → **💾 Save** / **← Back** |
 | Extracts view | Undo typing in the editor | `Ctrl+Z` |
 | Extracts view | Open an Extract's origin in the reader | **↱ Jump** |
@@ -144,6 +147,9 @@ Everything — your library, your read position, your blue extracts — lives in
 | Extract editor | Turn the selection into a flashcard | select → `Ctrl+K` (or right-click → 🃏 Make flashcard…, or toolbar 🃏 Make flashcard) → type question → `Enter` (or **Add Flashcard**) |
 | Extract editor | Flashcard from an image alone | right-click the image (no text selection) → 🃏 Make flashcard from image… → type question → `Enter` |
 | Flashcards | Browse your cards | sidebar **🃏 Flashcards** |
+| Flashcards | See study stats | grey strip under the header: total cards, reviewed today, due tomorrow / next 7 days, and your 🔥 streak |
+| Flashcards | Sort the list | click a column header (Question / Source / Created / Next due) |
+| Flashcards | Find a card fast | type in 🔍 **Search cards…** (question + source name, case-insensitive) — ✕ or empty text clears |
 | Flashcards | Edit a card's question | select the row → **✏️ Edit question** (or `F2`, or right-click → ✏️ Edit question…) |
 | Flashcards | Delete a card | select the row → **🗑 Delete** (or `Del`, or right-click → 🗑 Delete) — asks first |
 | Flashcards | Start a review session | **▶ Review (n)** — n = cards due today (new + due); disabled (with "No cards due today") when none |
@@ -153,11 +159,18 @@ Everything — your library, your read position, your blue extracts — lives in
 | Review session | Grade the card | `1` Again · `2` Hard · `3` Good · `4` Easy (or the buttons) |
 | Review session | Close early | `Esc` (graded cards stay graded) |
 | Review session | Finish the session | summary → **Close** (Again cards return first, total stays fixed) |
-| Library | Add PDFs | ➕ Add PDF |
+| Library | Add PDFs | ➕ Add PDF (or `Ctrl+O`, or **File → Add PDF…**) |
 | Library | Open a PDF | double-click the row |
 | Library | Tick rows to remove | row checkbox (or **☑ Select all** / **☐ Clear**) |
 | Library | Remove the ticked PDFs | **🗑️ Remove Selected** (confirm) or `Delete` |
 | Library | Back up your study data | **💾 Backup** — saves a copy of `library.db` to `backups/` and shows you where |
+| Library | Load a previous backup | **♻️ Restore** — pick a snapshot from `backups/`, confirm, and the library is replaced |
+| Library | Export flashcards for Anki | **📤 CSV** — pick a location, get `Question,Answer,Source,Due` rows (commas/newlines in answers are quoted correctly) |
+| Library | Export your extracts as notes | **📤 MD** — one Markdown file: a heading per document, a sub-heading per extract, images marked `[image]` |
+| Reader | Remember zoom per PDF | zoom in/out once — that PDF reopens at the same zoom; a first open starts at **Fit** |
+| Anywhere | Jump between views | `Ctrl+1` Library · `Ctrl+2` Extracts · `Ctrl+3` Flashcards (or **View** menu) |
+| Reader | Find / zoom / page from the menu | **Reader** menu: Find `Ctrl+F`, Zoom `Ctrl++`/`Ctrl+-`, Pages `PgUp`/`PgDown` — only while the reader is open |
+| Anywhere | Keyboard shortcut list | `?` (in the reader) or **Help → Keyboard shortcuts…** (`Ctrl+/`) |
 
 ---
 
@@ -173,6 +186,8 @@ Turn any passage you selected into a flashcard:
 The answer is copied at that moment — text and image bytes alike — so editing the Extract afterwards never changes the card, and the card still shows its images even if the source document is removed. The dialog's answer preview displays the images inline, not just placeholder boxes. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — and a card whose source PDF was removed keeps that document's name (marked `⚠ removed source`, same as the Extracts tree) instead of hiding the source.
 
 **Fix or remove a card from the list**: select its row and click **✏️ Edit question** (or press `F2`, or right-click the row) to correct a typo — only the question is written, so the card's schedule and next due date do not move; or click **🗑 Delete** (or press `Del`, or right-click) — a confirmation names the card, and confirming removes that card's question, answer, images and review history, **nothing else** (the source Extract stays in your library).
+
+**Sort and search the list (#110)**: click any column header to sort (Question, Source, Created, Next due). Type in **🔍 Search cards…** in the header to narrow the list live — it matches the question **and** the source document name (case-insensitive), and combines with **📅 Due today** (search *within* today's due set). A search with no hits hides the table and says `No cards match “…”`; clearing the box brings every card back.
 
 **Only see what's due today**: click **📅 Due today** in the header — the list then shows exactly the cards a Review session would grade (same rule: overdue, due later today, and brand-new cards; tomorrow's cards stay hidden, sorted soonest-first). Click it again to return to **All**. With nothing due, the table hides and the orange "No cards due today" hint explains why.
 
