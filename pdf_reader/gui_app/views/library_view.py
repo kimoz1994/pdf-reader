@@ -4,8 +4,8 @@ Library View - Fast, professional with responsive layout
 """
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QListWidget, QListWidgetItem, QFileDialog, QProgressBar,
-    QFrame, QMenu, QMessageBox, QScrollArea, QCheckBox
+    QListWidget, QListWidgetItem, QAbstractItemView, QFileDialog,
+    QProgressBar, QFrame, QMenu, QMessageBox, QScrollArea, QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
@@ -287,6 +287,12 @@ class LibraryView(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         self.pdf_list = QListWidget()
+        # A plain click does NOTHING (#93): no highlight, no state —
+        # selection served no purpose (Remove reacts only to checkboxes,
+        # Del to ticked rows, double-click to the open signal).
+        self.pdf_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection
+        )
         self.pdf_list.setStyleSheet("""
             QListWidget {
                 background-color: #2b2b2b;
@@ -301,16 +307,10 @@ class LibraryView(QWidget):
                 padding: 5px;
                 margin: 5px 0;
             }
-            QListWidget::item:selected {
-                background-color: #3498db;
-                border: 2px solid #2980b9;
-            }
             QListWidget::item:hover {
                 background-color: #3d566e;
             }
         """)
-        # A plain click only highlights the row (never arms a removal —
-        # that is the checkbox's job); double-click opens the PDF.
         self.pdf_list.itemDoubleClicked.connect(self.on_pdf_double_clicked)
 
         # Del removes the ticked rows (#72), scoped to this view so it
