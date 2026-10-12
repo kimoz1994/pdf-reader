@@ -78,7 +78,29 @@ No environment variables or API keys are required. The app creates `pdf_reader/g
 
 ## Deployment
 
-Not deployed — it is a local desktop application. Packaging into a standalone installer is planned future work (see Future work).
+Not deployed — it is a local desktop application. For running it **without a Python environment**, the repo ships a PyInstaller build (#118):
+
+### Running without Python (standalone build)
+
+Build steps (Windows, from the repo root):
+
+```powershell
+# 1. One-time: install deps + PyInstaller into the app's environment
+pip install -r requirements.txt -r requirements-dev.txt
+
+# 2. Build (produces dist/pdf_reader/pdf_reader.exe, ~1-2 min)
+python -m PyInstaller --noconfirm pdf_reader.spec
+
+# 3. Smoke-run the result
+.\dist\pdf_reader\pdf_reader.exe
+```
+
+Notes:
+
+- The spec (`pdf_reader.spec`) collects QtPdf (`PyQt6.QtPdf` — PyInstaller's static analysis doesn't always trace it) and PyMuPDF submodules; windowed (`console=False`) build.
+- In the built app, `library.db` and `backups/` live **next to `pdf_reader.exe`** (not inside `_internal/`, which an upgrade replaces).
+- Distribute the whole `dist/pdf_reader/` folder — the exe is not self-contained in one file. Zipping that folder is the simplest way to share it.
+- No installer/signing yet; this is a manual build. CI does not build it.
 
 ## Architecture
 
@@ -144,12 +166,12 @@ None. The project is developed locally with git-only workflow (feature branches 
 - The core reader view (`pdf_reader_view.py`) is mostly verified manually — drag→`e`→blue, image click-capture, and `d`-twice delete are checked by hand; only its search behavior (keys/highlight, `test_pdf_search.py`) is pytest-covered. Right-click context menus are a further manual-only corner: offscreen Qt (used by CI) cannot deliver them.
 - The hint system (`services/hint_overlay.py`, `hint_generator.py`) and the search engine (`services/search_engine.py`) exist but are not wired into the running app — search is implemented inline in the reader view.
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
-- No packaging/installer yet; requires a Python environment.
+- No installer yet — the standalone build (#118) is a PyInstaller folder (`dist/pdf_reader/`) you build by hand; the dev workflow still requires a Python environment.
 
 ## Future work
 
 1. Flashcards: creation, listing, and the FSRS review session shipped (#55/#56/#57/#58), including session completion behaviors — Again re-queue within a fixed total, "n of m" progress, end-of-session summary, "No cards due today" hint (#59) — list row actions — edit question / delete card with confirmation (#60) — the All ⇄ Due-today list toggle that shows exactly the Review session's set (#61) — and the source jump: clicking a card's Source cell opens its Extract in the Extract Editor, while cards orphaned by source deletion survive marked `⚠ source gone` with the jump hidden, no cascade (#62). The user guide now includes a worked create → review walkthrough (#63).
-2. Standalone packaging (e.g. PyInstaller), lint on top of the existing CI.
+2. Standalone packaging shipped (#118): a PyInstaller spec builds a Windows `.exe` (see Deployment); an installer, code signing, and CI-built artifacts are still open, as is lint on top of the existing CI.
 3. Data safety: one-click backup of `library.db` shipped (#83) — the `💾 Backup` button snapshots the DB (extracts, flashcards, schedules) into `backups/`, pruning to the newest 10 copies.
 
 ## Self-evaluation

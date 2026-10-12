@@ -4,3 +4,5 @@ __pycache__/
 extracts/
 perf.log
 perf.enabled
+build/
+dist/
