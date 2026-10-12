@@ -568,9 +568,14 @@ class PDFReaderView(QWidget):
         _t0 = time.perf_counter()
         self._loading_document = True
         try:
-            if self.pdf_view:
-                self.pdf_view.setDocument(None)
-
+            # Close the old doc while the view stays attached instead of
+            # detaching with setDocument(None): that null transition trips
+            # a Qt bug (QPdfLinkModel::setDocument connects the document
+            # without a null guard — qpdflinkmodel.cpp:122 — so clearing
+            # the view logs "QObject::connect(QPdfDocument, QPdfLinkModel):
+            # invalid nullptr parameter"). A closed doc blanks the view the
+            # same way, and the swap below is non-null -> non-null (verified
+            # warning-free in both directions).
             if self.doc is not None:
                 self.doc.close()
                 self.doc = None
@@ -1461,8 +1466,10 @@ class PDFReaderView(QWidget):
     def closeEvent(self, event):
         self._reset_extract_state()
         self._loading_document = True
-        if self.pdf_view:
-            self.pdf_view.setDocument(None)
+        # No setDocument(None) here either (see load_pdf): closing the doc
+        # blanks the attached view without the QPdfLinkModel null-connect
+        # warning; the view is destroyed before the doc (it is constructed
+        # first), so the attachment never outlives teardown.
         if self.doc is not None:
             self.doc.close()
             self.doc = None
