@@ -9,7 +9,6 @@ Key concepts:
 """
 
 # gui_app/services/element_detector.py
-from .pdf_loader import PDFLoader  # Only needed for the test section
 from dataclasses import dataclass
 from typing import List
 
@@ -163,17 +162,3 @@ class ElementDetector:
                 print(f"Warning: Could not extract image {xref}: {e}")
         
         return image_data
-
-# Test it
-if __name__ == "__main__":
-    from pdf_loader import PDFLoader
-    
-    with PDFLoader("test.pdf") as loader:
-        page = loader.get_page(0)
-        detector = ElementDetector(page, 0)
-        
-        elements = detector.get_all_elements()
-        
-        print(f"Found {len(elements)} elements:")
-        for elem in elements:
-            print(f"  - {elem.element_type}: {elem.content[:50]}...")
