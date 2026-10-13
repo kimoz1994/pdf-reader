@@ -380,18 +380,24 @@ def test_zoom_in_label_shows_percentage(view, app):
     assert "%" in view.zoom_fit_btn.text()
 
 
-def test_zoom_fit_button_text_is_readable_on_light_toolbar(view, app):
-    """(#105 follow-up) The Fit button and page-total label must not use
-    white text: the default Fusion toolbar is light, so white rendered an
-    invisible empty box. Regression guard against that bug."""
+def test_zoom_fit_button_text_is_palette_adaptive(view, app):
+    """(#105 follow-up) The Fit button and page-total label must follow the
+    palette: the toolbar is dark under system dark mode and light under a
+    light palette, so ANY hardcoded text color vanishes half the time
+    (white was invisible on light, dark on dark). Regression guard."""
     for widget in (view.zoom_fit_btn, view.page_total_label):
         style = widget.styleSheet().lower()
         assert "color:white" not in style, (
-            f"{widget.objectName() or type(widget).__name__} uses "
-            "white text, invisible on the light toolbar"
+            f"{type(widget).__name__} hardcodes white - invisible on a "
+            "light palette"
         )
-        assert "color: #2c3e50" in style or "color:#2c3e50" in style, (
-            "expected dark readable text"
+        assert "#2c3e50" not in style, (
+            f"{type(widget).__name__} hardcodes dark text - invisible on "
+            "the dark (system dark mode) toolbar"
+        )
+        assert "palette(" in style, (
+            f"{type(widget).__name__} should take its color from "
+            "palette(...) so it adapts to the theme"
         )
 
 

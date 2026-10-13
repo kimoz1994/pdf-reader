@@ -253,6 +253,23 @@ def test_export_buttons_live_on_extracts_view(app, conn, monkeypatch):
     assert hasattr(view, "export_md_btn")
 
 
+def test_editor_hides_the_header_export_buttons(app, conn, monkeypatch):
+    """(#135 follow-up) The full-area Extract Editor hides the whole
+    tree header — the 📤 buttons included — and Back restores them."""
+    doc_id, eid = seed_extract(conn)
+    view = make_view(conn, monkeypatch)
+    assert not view.export_csv_btn.isHidden()
+    assert not view.export_md_btn.isHidden()
+
+    assert view.open_extract(doc_id, eid) is True
+    assert view.export_csv_btn.isHidden()
+    assert view.export_md_btn.isHidden()
+
+    view._close_editor()
+    assert not view.export_csv_btn.isHidden()
+    assert not view.export_md_btn.isHidden()
+
+
 def test_export_csv_writes_anki_file(app, conn, monkeypatch, tmp_path):
     """(#112 AC) The CSV button asks where, writes question/answer/
     source/due rows, and reports the path."""
