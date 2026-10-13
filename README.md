@@ -8,11 +8,39 @@ It helps people who read PDFs for learning — course materials, papers, and tec
 
 ## Demo
 
-*Work in progress — screenshots are pending.*
-
 The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
 
 The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Select an Extract — or any capture inside it — and press `Enter` (or double-click) to open the full-area **Extract Editor**, which shows the whole group as ONE continuous document you can type into — text and inline images together, one cursor across all captures (**💾 Save** persists mid-session; `← Back` auto-saves and returns to the tree). **↱ Jump** (click) reopens the reader centered on the original region with a brief orange flash.
+
+## Screenshots
+
+**Library** — your PDFs, read progress, bulk remove, one-click backup
+
+![Library with three PDF rows, two of them ticked, and the Remove Selected (2) button counting them](docs/images/library.png)
+
+**Capture** — drag over text, it lights up yellow (pending)
+
+![Reader with a yellow pending highlight on one line and an already-saved blue Extract on the line below](docs/images/reader-yellow.png)
+
+**Extract** — press `e` and the yellow is saved in blue, forever
+
+![The same two lines both in blue after pressing e](docs/images/reader-blue.png)
+
+**Extracts view** — every capture, organized by document
+
+![Extracts tree with the Supermemo document expanded to three Extract rows, each with a Jump link](docs/images/extracts-tree.png)
+
+**Extract editor** — text and images together in one continuous document
+
+![Extract Editor showing one Extract as a continuous document: a sentence with an inline forgetting-curve figure below it](docs/images/extract-editor.png)
+
+**Make a flashcard** — turn any selected passage into a question
+
+![Make flashcard dialog: the answer preview shows the selected text with its inline image, and the question is typed below](docs/images/flashcard-dialog.png)
+
+**Flashcards** — due-today filter and spaced-repetition review (FSRS)
+
+![Flashcards list with two cards, blue clickable source links, the Due-today filter and the green Review (2) button](docs/images/flashcards-list.png)
 
 ## Problem
 
