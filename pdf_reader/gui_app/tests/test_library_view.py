@@ -71,8 +71,12 @@ def test_missing_file_row_still_listed_marked_and_removable(view, tmp_path, monk
 
     monkeypatch.setattr(view, "_confirm_removal", lambda names: True)
     view.remove_selected_pdfs()
+    # Soft-delete: the row is hidden from the list but not dropped.
     assert view.pdf_list.count() == 0
-    assert view.cursor.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 0
+    hidden = view.cursor.execute(
+        "SELECT COUNT(*) FROM pdfs WHERE COALESCE(removed, 0) = 1"
+    ).fetchone()[0]
+    assert hidden == 1
 
 
 def test_tick_shows_count_and_updates_stats(view, tmp_path):
@@ -119,7 +123,7 @@ def test_select_all_toggles_every_row(view, tmp_path):
     assert not view.remove_btn.isEnabled()
 
 
-def test_remove_deletes_only_checked_rows(view, tmp_path, monkeypatch):
+def test_remove_hides_only_checked_rows(view, tmp_path, monkeypatch):
     kept, doomed = tmp_path / "keep.pdf", tmp_path / "bye.pdf"
     seed(view, kept)
     seed(view, doomed)
@@ -136,8 +140,60 @@ def test_remove_deletes_only_checked_rows(view, tmp_path, monkeypatch):
     view.remove_selected_pdfs()
 
     assert confirmed["names"] == ["bye.pdf"]
-    paths = {r[0] for r in view.cursor.execute("SELECT path FROM pdfs")}
+    # Soft-delete: the row is flagged, not dropped, and the visible
+    # list keeps only the kept PDF.
+    paths = {r[0] for r in view.cursor.execute(
+        "SELECT path FROM pdfs WHERE COALESCE(removed, 0) = 0"
+    )}
     assert paths == {str(kept)}
+    assert view.pdf_list.count() == 1
+
+
+def test_readd_after_remove_restores_id_page_and_extracts(
+    view, tmp_path, monkeypatch
+):
+    """Re-add a PDF you removed earlier: the same row comes back with its
+    saved page number and its blue extracts still linked (#99 follow-up)."""
+    pdf = tmp_path / "book.pdf"
+    _make_real_pdf(pdf, pages=3)
+    view.add_pdf_to_library(str(pdf))
+    view.load_library()
+
+    # Simulate: the user read to page 7 and committed an extract.
+    view.update_progress(str(pdf), 7)
+    doc_id = view.cursor.execute(
+        "SELECT id FROM pdfs WHERE path = ?", (str(pdf),)
+    ).fetchone()[0]
+    from services.extract_store import (  # noqa: PLC0415
+        Capture,
+        commit_working_set,
+        init_schema,
+    )
+
+    init_schema(view.conn)
+    commit_working_set(
+        view.conn,
+        doc_id,
+        [Capture(page=0, rect=None, kind="text", text_content="the extract")],
+    )
+
+    monkeypatch.setattr(view, "_confirm_removal", lambda names: True)
+    view.selected_pdfs.add(str(pdf))
+    view.remove_selected_pdfs()
+    assert view.pdf_list.count() == 0
+
+    view.add_pdf_to_library(str(pdf))
+    view.load_library()
+
+    assert view.pdf_list.count() == 1
+    row = view.cursor.execute(
+        "SELECT id, current_page FROM pdfs WHERE path = ?", (str(pdf),)
+    ).fetchone()
+    assert row == (doc_id, 7)
+    linked = view.cursor.execute(
+        "SELECT COUNT(*) FROM extracts WHERE doc_id = ?", (doc_id,)
+    ).fetchone()[0]
+    assert linked == 1
 
 
 def test_remove_cancelled_keeps_every_row(view, tmp_path, monkeypatch):
@@ -168,8 +224,12 @@ def test_del_key_removes_checked_rows(view, tmp_path, monkeypatch, app):
     app.processEvents()
     QTest.keyClick(view.pdf_list, Qt.Key.Key_Delete)
 
+    # Soft-delete: the row stays in the DB but is hidden from the list.
     assert view.pdf_list.count() == 1
-    assert view.cursor.execute("SELECT COUNT(*) FROM pdfs").fetchone()[0] == 1
+    hidden = view.cursor.execute(
+        "SELECT COUNT(*) FROM pdfs WHERE COALESCE(removed, 0) = 1"
+    ).fetchone()[0]
+    assert hidden == 1
 
 
 # ------------------------------------------------------------
@@ -518,7 +578,7 @@ def test_remove_failure_toasts(view, tmp_path, monkeypatch):
 
     class BoomCursor:
         def execute(self, sql, *a, **k):
-            if "DELETE" in sql:
+            if "UPDATE" in sql:
                 raise RuntimeError("db locked")
             return real_cursor.execute(sql, *a, **k)
 
@@ -527,6 +587,7 @@ def test_remove_failure_toasts(view, tmp_path, monkeypatch):
 
         def fetchone(self):
             return real_cursor.fetchone()
+
 
     view.cursor = BoomCursor()
 
@@ -610,107 +671,3 @@ def test_readd_refreshes_name_and_page_count(view, tmp_path):
     ).fetchone()
     assert name == "a.pdf"
     assert pages == 5
-
-
-# ------------------------------------------------------------
-# Export (#112)
-# ------------------------------------------------------------
-
-
-def test_export_csv_writes_anki_file(view, tmp_path, monkeypatch):
-    """(#112 AC) The CSV button asks where, writes question/answer/
-    source/due rows, and reports the path."""
-    from services.extract_store import create_flashcard, init_schema
-
-    init_schema(view.conn)
-    create_flashcard(view.conn, "What is X?", "X is a thing")
-    out = tmp_path / "cards.csv"
-    monkeypatch.setattr(
-        "views.library_view.QFileDialog.getSaveFileName",
-        lambda *a, **k: (str(out), "CSV files (*.csv)"),
-    )
-    infos = []
-    monkeypatch.setattr(
-        "views.library_view.QMessageBox.information",
-        lambda *a: infos.append(a),
-    )
-
-    view.export_csv_btn.click()
-
-    text = out.read_text(encoding="utf-8")
-    assert text.splitlines()[0] == "Question,Answer,Source,Due"
-    assert "What is X?," in text
-    assert infos and str(out) in infos[0][2]
-
-
-def test_export_md_writes_markdown(view, tmp_path, monkeypatch):
-    """(#112 AC) The MD button writes one file with document + extract
-    headings."""
-    from services.extract_store import Capture, commit_working_set, init_schema
-
-    init_schema(view.conn)
-    seed(view, tmp_path / "a.pdf")
-    doc_id = view.cursor.execute(
-        "SELECT id FROM pdfs WHERE path = ?", (str(tmp_path / "a.pdf"),)
-    ).fetchone()[0]
-    commit_working_set(
-        view.conn, doc_id, [Capture(0, (0, 0, 1, 1), "text", "hello export")]
-    )
-    out = tmp_path / "notes.md"
-    monkeypatch.setattr(
-        "views.library_view.QFileDialog.getSaveFileName",
-        lambda *a, **k: (str(out), "Markdown files (*.md)"),
-    )
-    infos = []
-    monkeypatch.setattr(
-        "views.library_view.QMessageBox.information",
-        lambda *a: infos.append(a),
-    )
-
-    view.export_md_btn.click()
-
-    text = out.read_text(encoding="utf-8")
-    assert "# a.pdf" in text
-    assert "hello export" in text
-    assert infos and str(out) in infos[0][2]
-
-
-def test_export_csv_cancel_writes_nothing(view, tmp_path, monkeypatch):
-    """(#112) Cancelling the save dialog leaves the filesystem alone."""
-    from services.extract_store import create_flashcard, init_schema
-
-    init_schema(view.conn)
-    create_flashcard(view.conn, "Q?", "A")
-    monkeypatch.setattr(
-        "views.library_view.QFileDialog.getSaveFileName",
-        lambda *a, **k: ("", ""),
-    )
-    monkeypatch.setattr(
-        "views.library_view.QMessageBox.information", lambda *a: None
-    )
-
-    view.export_csv_btn.click()  # must not raise, must not write
-
-    assert not list(tmp_path.glob("*.csv"))
-
-
-def test_export_csv_empty_library_informs(view, monkeypatch):
-    """(#112) No cards ΓåÆ info dialog, no save prompt."""
-    from services.extract_store import init_schema
-
-    init_schema(view.conn)
-    infos = []
-    monkeypatch.setattr(
-        "views.library_view.QMessageBox.information",
-        lambda *a: infos.append(a),
-    )
-    prompts = []
-    monkeypatch.setattr(
-        "views.library_view.QFileDialog.getSaveFileName",
-        lambda *a, **k: prompts.append(1) or ("", ""),
-    )
-
-    view.export_csv_btn.click()
-
-    assert infos and "no flashcards" in infos[0][2].lower()
-    assert prompts == []

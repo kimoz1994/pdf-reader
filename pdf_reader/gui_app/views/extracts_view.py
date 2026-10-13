@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QDialog,
     QLineEdit,
+    QFileDialog,
 )
 from PyQt6.QtCore import Qt, QBuffer, QItemSelectionModel, QIODevice, QUrl, pyqtSignal
 from PyQt6.QtGui import (
@@ -55,10 +56,12 @@ from services.extract_store import (
     display_title,
     list_docs_with_extracts,
     list_extracts_for_doc,
+    list_flashcards,
     preview_for_extract,
     save_extract_text,
     set_capture_display_w,
 )
+from services.export_data import extracts_to_markdown, flashcards_to_csv
 from services.selection_snapshot import snapshot_image, snapshot_selection
 from views.flashcard_answer import fill_answer
 
@@ -479,6 +482,37 @@ class ExtractsView(QWidget):
         )
         self.delete_btn.clicked.connect(self.delete_selected)
         buttons.addWidget(self.delete_btn)
+
+        # Export (#112, moved here from the Library view per user request):
+        # plain files out of library.db — CSV for flashcards, MD for extracts.
+        self.export_csv_btn = QPushButton("📤 CSV")
+        self.export_csv_btn.setFixedHeight(40)
+        self.export_csv_btn.setToolTip(
+            "Export all flashcards as an Anki-importable CSV"
+        )
+        self.export_csv_btn.setStyleSheet(
+            "QPushButton { background-color: #8e44ad; color: white;"
+            " border: none; border-radius: 8px; font-size: 15px;"
+            " font-weight: bold; }"
+            "QPushButton:hover { background-color: #9b59b6; }"
+        )
+        self.export_csv_btn.clicked.connect(self._export_flashcards_csv)
+        buttons.addWidget(self.export_csv_btn)
+
+        self.export_md_btn = QPushButton("📤 MD")
+        self.export_md_btn.setFixedHeight(40)
+        self.export_md_btn.setToolTip(
+            "Export every Extract as one Markdown file"
+        )
+        self.export_md_btn.setStyleSheet(
+            "QPushButton { background-color: #8e44ad; color: white;"
+            " border: none; border-radius: 8px; font-size: 15px;"
+            " font-weight: bold; }"
+            "QPushButton:hover { background-color: #9b59b6; }"
+        )
+        self.export_md_btn.clicked.connect(self._export_extracts_md)
+        buttons.addWidget(self.export_md_btn)
+
         buttons.addStretch()
         layout.addLayout(buttons)
 
@@ -655,6 +689,73 @@ class ExtractsView(QWidget):
 
         self.editor_page.hide()
         layout.addWidget(self.editor_page)
+
+    def _export_flashcards_csv(self):
+        """📤 CSV: ask where, write the Anki-importable file, report the
+        path (#112, moved here from the Library view). Empty library →
+        helpful info, no dialog."""
+        conn = self._db_conn()
+        if conn is None:
+            return
+        cards = list_flashcards(conn)
+        if not cards:
+            QMessageBox.information(
+                self, "Nothing to export", "There are no flashcards yet."
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export flashcards", "flashcards.csv",
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(flashcards_to_csv(cards))
+        except OSError as e:
+            print(f"Error exporting flashcards: {e}")
+            QMessageBox.critical(self, "Export failed", str(e))
+            return
+        QMessageBox.information(
+            self, "Export complete",
+            f"Wrote {len(cards)} flashcards to:\n{path}",
+        )
+
+    def _export_extracts_md(self):
+        """📤 MD: ask where, write one Markdown file, report the path
+        (#112, moved here from the Library view). Empty library →
+        helpful info, no dialog."""
+        conn = self._db_conn()
+        if conn is None:
+            return
+        docs = list_docs_with_extracts(conn)
+        if not docs:
+            QMessageBox.information(
+                self, "Nothing to export", "There are no extracts yet."
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export extracts", "extracts.md",
+            "Markdown files (*.md);;All files (*)",
+        )
+        if not path:
+            return
+        by_doc = {
+            doc_id: list_extracts_for_doc(conn, doc_id)
+            for doc_id, _name, _p in docs
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(extracts_to_markdown(docs, by_doc))
+        except OSError as e:
+            print(f"Error exporting extracts: {e}")
+            QMessageBox.critical(self, "Export failed", str(e))
+            return
+        total = sum(len(v) for v in by_doc.values())
+        QMessageBox.information(
+            self, "Export complete",
+            f"Wrote {total} extracts to:\n{path}",
+        )
 
     def refresh(self):
         """Reload the Document -> Extract hierarchy (one row per Extract)."""
