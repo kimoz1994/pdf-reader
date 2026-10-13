@@ -2,15 +2,31 @@
 
 A desktop PDF reader for studying: read documents in a keyboard-driven reader, extract highlights into notes, and review them later.
 
-It helps people who read PDFs for learning — course materials, papers, and technical docs — capture what matters without leaving the reading flow. Select text (drag) or an image (click), press `e`, and it becomes a persistent extract you can review and delete from the reader or the dedicated Extracts view. Turn any passage into a flashcard and drill it with an Anki-style spaced-repetition session (FSRS).
+It helps people who read PDFs for learning — course materials, papers, and technical docs:
+
+- Select text (drag) or an image (click), press `e` — it becomes a permanent Extract.
+- Review, edit, and jump back to your extracts anytime; they survive restarts.
+- Turn any passage into a flashcard and drill it with spaced repetition (FSRS, like Anki).
 
 **New here? Start with the [How to Use guide](HOW_TO_USE.md)** — a guided, example-driven tour of every feature.
 
 ## Demo
 
-The core reader is already usable: open a PDF from the library, navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `space`), search with `/`, and zoom with `+`/`-`. Read progress (last page) is remembered per file.
+The reader:
 
-The capture workflow is in: drag over text (or click a detected image) to build a transient yellow **Working Set** (non-contiguous selections stack), press `e` to persist it as a single **Extract**, which re-draws in transparent **blue** and survives restarts (stored in `library.db`). `Esc` clears the Working Set without persisting. Press `d` twice to delete the newest Extract on the current page, or review/delete everything from the **Extracts** view (Documents → Extracts → Captures, newest-first, each Extract row previewing its content). Select an Extract — or any capture inside it — and press `Enter` (or double-click) to open the full-area **Extract Editor**, which shows the whole group as ONE continuous document you can type into — text and inline images together, one cursor across all captures (**💾 Save** persists mid-session; `← Back` auto-saves and returns to the tree). **↱ Jump** (click) reopens the reader centered on the original region with a brief orange flash.
+- Open a PDF from the library (double-click a row); read progress is remembered per file
+- Navigate with Vim-style keys (`j`/`k`, `gg`/`G`, `Space`), search with `/`, zoom with `+`/`-`
+
+Capture workflow:
+
+- Drag over text (or click an image) — it lights up **yellow** (pending)
+- Stack non-contiguous selections; they all commit together
+- Press `e` — saved as one **blue Extract** (survives restarts, stored in `library.db`)
+- Press `Esc` — discard the pending set without saving
+- Press `d` `d` — delete the newest Extract on the current page
+- **📝 Extracts view** — browse and delete every extract, grouped by document
+- Open an extract (`Enter` / double-click) in the full-area editor: text and inline images in one document; **💾 Save**, or **← Back** (auto-saves)
+- **↱ Jump** — reopens the reader centered on the original region, with a brief orange flash
 
 ## Screenshots
 
@@ -52,18 +68,37 @@ This project is a study workflow: select, extract, review — in one place, keyb
 
 ## Evaluation
 
-Shipped as the snappiness round (#87–#94, PRs #90–#96): scroll, open, Back and reopen were each diagnosed, fixed and measured with an opt-in timing log (`PDFR_DEBUG_PERF=1` or a `perf.enabled` marker file → console + `pdf_reader/gui_app/perf.log`, including the perceived-latency line `back: click -> library first paint`). Highlights on the dev machine: cold open 756 → ~290 ms, same-file reopen ~400+ → ~5 ms, Back click → first paint ~8–11 ms. Continue to evaluate by feel in real use — with the log on, every Back click records its real latency in `perf.log`.
+The snappiness round (#87–#94, PRs #90–#96) diagnosed, fixed and measured scroll, open, Back and reopen with an opt-in timing log (`PDFR_DEBUG_PERF=1` or a `perf.enabled` marker file → console + `pdf_reader/gui_app/perf.log`):
+
+- Cold open: 756 → ~290 ms
+- Same-file reopen: ~400+ → ~5 ms
+- Back click → first paint: ~8–11 ms (dev machine)
+- Every Back click records its real latency in `perf.log` (`back: click -> library first paint`)
 
 ## Testing
 
-The seams in `gui_app/services/` and the offscreen-capable Qt views have a pytest suite (~217 tests): extract/capture/flashcard SQL and DB backup against a temp SQLite DB, layout math, editor-selection snapshots, the FSRS scheduler, the review-session loop, card-list/due-filter behavior, the Extracts-view jump landing, library-list UX (checkbox removal, backup, Back rebuild-skip, row-click no-op), tree/flashcard label helpers, reader search keys, and the reader's open/reopen seams (extract load once, fast-reopen identity). CI (`.github/workflows/tests.yml`) runs the whole suite on every push to `master` and every PR (ubuntu-latest, Python 3.12, `QT_QPA_PLATFORM=offscreen`, #81).
+The seams in `gui_app/services/` and the offscreen-capable Qt views have a pytest suite (**295 tests**):
+
+- SQL seams — extract/capture/flashcard + DB backup against a temp SQLite DB
+- Layout math, editor-selection snapshots, the FSRS scheduler
+- Review-session loop, card-list and due-filter behavior
+- Extracts-view jump landing; library-list UX (checkbox removal, backup, rebuild-skip)
+- Reader search keys + open/reopen seams (extract load once, fast-reopen identity)
+- Tree/flashcard label helpers
+
+CI (`.github/workflows/tests.yml`) runs the whole suite on every push to `master` and every PR (ubuntu-latest, Python 3.12, `QT_QPA_PLATFORM=offscreen`, #81).
 
 ```powershell
 cd pdf_reader/gui_app
 $env:PYTHONNOUSERSITE="1"; & "D:\volume\tempprograms\anaconda\envs\pdf-reader-clean\Scripts\pytest.exe" tests/
 ```
 
-Deps: `pytest` is in `requirements-dev.txt`. The core reader (`pdf_reader_view.py`) is verified manually against `pdf_reader/pdfs/test.pdf`: drag → yellow → `e` → blue, `Esc` clears, blue re-draws on reopen, click an image → yellow → `e` → blue, `d`-twice deletes, and ↱ Jump reopens the reader centered on the region; only its search behavior (keys/highlight) is pytest-covered. The Extracts view's list/delete flow and the Extract Editor's edit loop (type, Save, Back auto-saves) are likewise manual — only the view's `open_extract` jump landing has widget tests.
+Deps: `pytest` is in `requirements-dev.txt`. Still verified by hand (no widget tests):
+
+- Reader core against `pdf_reader/pdfs/test.pdf`: drag → `e` → blue, `Esc`, blue re-draw on reopen, image click-capture, `d`-twice delete, ↱ Jump centering
+- Extracts list/delete flow; the editor's type → 💾 Save → ← Back loop
+
+pytest does cover the reader's search keys/highlight and its open/reopen seams, and the Extracts view's `open_extract` jump landing.
 
 ## Monitoring
 
@@ -144,14 +179,17 @@ MainWindow
 ├── ExtractsView      Documents → Extracts → Captures review + edit + delete
 └── FlashcardsView    card list + FSRS review session: Review (n) → question → reveal → grade 1-4 (Again re-queues, summary)
 
-services/             engine module (element detection for image click-capture)
+services/             headless seams (SQL, layout math, scheduler, exports, perf) + image click-capture
 services/extract_store.py   headless extract/capture/flashcard SQL seam (no Qt), pytest-tested
 services/selection_snapshot.py  editor selection → answer snapshot seam (offscreen Qt), pytest-tested
 services/fsrs_scheduler.py  FSRS scheduling seam over the pinned `fsrs` lib (fuzz on in app, off in tests), pytest-tested
 services/pdf_geometry.py    layout/mapping math mirroring Qt's calculateDocumentLayout
 ```
 
-The reader renders pages through QtPdf (`QPdfView`); PyMuPDF is used for text search, image element detection (for click-capture), and image blob rendering; `QPdfDocument.getSelection` supplies the text payload for drag-captures. Highlight rects are computed by a Qt-mirroring layout model (`pdf_geometry.py`) so yellow/blue rects stay aligned with the rendered pages.
+- Pages render through QtPdf (`QPdfView`)
+- PyMuPDF handles text search, image element detection (click-capture), and image blob rendering
+- `QPdfDocument.getSelection` supplies the text payload for drag-captures
+- Highlight rects come from a Qt-mirroring layout model (`pdf_geometry.py`), so yellow/blue stay aligned with the rendered page
 
 ## Project structure
 
@@ -160,7 +198,9 @@ pdf_reader/
 ├── requirements.txt          pinned runtime dependencies
 ├── requirements-dev.txt      dev/test deps (pytest)
 ├── run.ps1 / dev.ps1         run once / auto-restart while developing
+├── build.ps1                 one-command PyInstaller build + smoke-check
 ├── CONTEXT.md                domain vocabulary for the extract feature
+├── docs/images/              screenshots for this README and HOW_TO_USE.md
 ├── pdf_reader/
 │   ├── gui_app/
 │   │   ├── main.py           entry point
@@ -168,7 +208,10 @@ pdf_reader/
 │   │   ├── services/
 │   │   │   ├── extract_store.py   headless extract/capture/flashcard SQL seam (no Qt)
 │   │   │   ├── selection_snapshot.py  editor selection → answer snapshot (offscreen Qt)
+│   │   │   ├── fsrs_scheduler.py  FSRS scheduling over the pinned `fsrs` lib
 │   │   │   ├── pdf_geometry.py    Qt-mirroring layout/mapping math
+│   │   │   ├── export_data.py     CSV/Markdown export builders
+│   │   │   ├── perf_log.py        opt-in timing log (perf.enabled / PDFR_DEBUG_PERF)
 │   │   │   └── element_detector.py  image click-capture in the reader
 │   │   ├── tests/            pytest — full suite in AGENTS.md's Testing section (seams + offscreen Qt views)
 │   │   └── views/
@@ -188,26 +231,42 @@ pdf_reader/
 
 ## CI/CD
 
-None. The project is developed locally with git-only workflow (feature branches + PRs). CI runs the full pytest suite on every push to master and every pull request via GitHub Actions (`QT_QPA_PLATFORM=offscreen` on ubuntu-latest, #81). Adding lint on top is still planned.
+- Git-only development: feature branches → PR → merge (no release automation)
+- CI (`.github/workflows/tests.yml`, #81): pytest suite offscreen on ubuntu-latest, every push to `master` and every PR
+- CI also builds the Windows exe, smoke-checks it, and uploads the `pdf-reader-windows` artifact (#118)
+- No CD: nothing is auto-released or deployed; a lint job on top of CI is still planned
 
 ## Limitations
 
-- The core reader view (`pdf_reader_view.py`) is mostly verified manually — drag→`e`→blue, image click-capture, and `d`-twice delete are checked by hand; only its search behavior (keys/highlight, `test_pdf_search.py`) is pytest-covered. Right-click context menus are a further manual-only corner: offscreen Qt (used by CI) cannot deliver them.
+- The core reader view (`pdf_reader_view.py`) is mostly verified by hand (drag→`e`→blue, image click-capture, `d`-twice delete); pytest covers its search keys/highlight (`test_pdf_search.py`) and its open/reopen seams (`test_highlight_refresh.py`)
+- Right-click context menus are manual-only: offscreen Qt (CI) cannot deliver them
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
 - No installer yet — the standalone build (#118) is a PyInstaller folder (`dist/pdf_reader/`) you build with `.\build.ps1`; CI builds and smoke-checks it on every push/PR. The dev workflow still requires a Python environment.
 
 ## Future work
 
-1. Flashcards: creation, listing, and the FSRS review session shipped (#55/#56/#57/#58), including session completion behaviors — Again re-queue within a fixed total, "n of m" progress, end-of-session summary, "No cards due today" hint (#59) — list row actions — edit question / delete card with confirmation (#60) — the All ⇄ Due-today list toggle that shows exactly the Review session's set (#61) — and the source jump: clicking a card's Source cell opens its Extract in the Extract Editor, while cards orphaned by source deletion survive marked `⚠ source gone` with the jump hidden, no cascade (#62). The user guide now includes a worked create → review walkthrough (#63).
-2. Standalone packaging shipped (#118): a PyInstaller spec builds a Windows `.exe` (see Deployment), CI builds and smoke-checks it on every push/PR and uploads it as an artifact; an installer and code signing are still open, as is lint on top of the existing CI.
-3. Data safety: one-click backup of `library.db` shipped (#83) — the `💾 Backup` button snapshots the DB (extracts, flashcards, schedules) into `backups/`, pruning to the newest 10 copies.
+Shipped along the way (kept for the rubric trail):
+
+- Flashcards + FSRS review session, due-today filter, source jumps (#54–#63)
+- PyInstaller build + CI exe artifact (#118)
+- One-click `library.db` backup (#83)
+
+Still open:
+
+- Installer + code signing for the standalone build
+- Lint job on top of the existing CI
 
 ## Self-evaluation
 
-This is a learning project (AI Dev Zoomcamp). Current status against the course rubric, to be revisited as features land: problem statement — covered (above); implementation — reader functional, full capture workflow shipped (drag/click → `e` → blue, `d`-twice delete, Extracts view, Extract Editor with read + edit, jump-back with centering flash); testing — seams and offscreen-capable views pytest-covered (~190 tests + CI), core reader verified manually; monitoring — not applicable (local app); documented as gaps rather than silent.
+This is a learning project (AI Dev Zoomcamp), checked against the course rubric:
+
+- Problem statement — covered (above)
+- Implementation — full capture workflow shipped (drag/click → `e` → blue, `d`-twice, Extracts view, editor, jump-back); flashcards + FSRS shipped
+- Testing — seams and offscreen-capable views pytest-covered (**295 tests** + CI); the core reader is verified by hand
+- Monitoring — not applicable (local app); gaps documented above rather than hidden
 
 ---
 
 ## How this README was built
 
-Follows the 16-section guidance from Alexey Grigorev's [How to Write a Good README](https://aishippingblog.com/p/how-to-write-a-good-readme). Sections that do not apply yet (evaluation, monitoring, CI/CD) are stated honestly instead of omitted, per the article's advice.
+Follows the 16-section guidance from Alexey Grigorev's [How to Write a Good README](https://aishippingblog.com/p/how-to-write-a-good-readme). Sections that don't fully apply (e.g. monitoring) are stated honestly instead of omitted, per the article's advice.
