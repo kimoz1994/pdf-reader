@@ -88,19 +88,23 @@ Build steps (Windows, from the repo root):
 # 1. One-time: install deps + PyInstaller into the app's environment
 pip install -r requirements.txt -r requirements-dev.txt
 
-# 2. Build (produces dist/pdf_reader/pdf_reader.exe, ~1-2 min)
-python -m PyInstaller --noconfirm pdf_reader.spec
+# 2. Build + smoke-check in one command (produces dist/pdf_reader/pdf_reader.exe)
+.\build.ps1
 
-# 3. Smoke-run the result
+# 3. Run it
 .\dist\pdf_reader\pdf_reader.exe
 ```
+
+`build.ps1` runs PyInstaller and then launches the exe for a few seconds to confirm it starts (a missing bundled Qt plugin or sqlite DLL shows up as an early exit). Pass `-NoCheck` to skip the smoke check. The manual equivalent is `python -m PyInstaller --noconfirm pdf_reader.spec` (~1-2 min).
+
+CI also builds this on every push/PR (a separate `windows-latest` job in `.github/workflows/tests.yml`) and uploads the `dist/pdf_reader/` folder as the `pdf-reader-windows` artifact, so a packaging break fails the build instead of rotting until someone runs it by hand.
 
 Notes:
 
 - The spec (`pdf_reader.spec`) collects QtPdf (`PyQt6.QtPdf` — PyInstaller's static analysis doesn't always trace it) and PyMuPDF submodules; windowed (`console=False`) build.
 - In the built app, `library.db` and `backups/` live **next to `pdf_reader.exe`** (not inside `_internal/`, which an upgrade replaces).
 - Distribute the whole `dist/pdf_reader/` folder — the exe is not self-contained in one file. Zipping that folder is the simplest way to share it.
-- No installer/signing yet; this is a manual build. CI does not build it.
+- No installer or code signing yet; this is a manual build. CI builds and smoke-checks the exe but does not produce a signed installer.
 
 ## Architecture
 
@@ -162,12 +166,12 @@ None. The project is developed locally with git-only workflow (feature branches 
 
 - The core reader view (`pdf_reader_view.py`) is mostly verified manually — drag→`e`→blue, image click-capture, and `d`-twice delete are checked by hand; only its search behavior (keys/highlight, `test_pdf_search.py`) is pytest-covered. Right-click context menus are a further manual-only corner: offscreen Qt (used by CI) cannot deliver them.
 - Re-highlighting already-extracted (blue) content is refused with a status hint — per the domain rule "yellow is never drawn over blue".
-- No installer yet — the standalone build (#118) is a PyInstaller folder (`dist/pdf_reader/`) you build by hand; the dev workflow still requires a Python environment.
+- No installer yet — the standalone build (#118) is a PyInstaller folder (`dist/pdf_reader/`) you build with `.\build.ps1`; CI builds and smoke-checks it on every push/PR. The dev workflow still requires a Python environment.
 
 ## Future work
 
 1. Flashcards: creation, listing, and the FSRS review session shipped (#55/#56/#57/#58), including session completion behaviors — Again re-queue within a fixed total, "n of m" progress, end-of-session summary, "No cards due today" hint (#59) — list row actions — edit question / delete card with confirmation (#60) — the All ⇄ Due-today list toggle that shows exactly the Review session's set (#61) — and the source jump: clicking a card's Source cell opens its Extract in the Extract Editor, while cards orphaned by source deletion survive marked `⚠ source gone` with the jump hidden, no cascade (#62). The user guide now includes a worked create → review walkthrough (#63).
-2. Standalone packaging shipped (#118): a PyInstaller spec builds a Windows `.exe` (see Deployment); an installer, code signing, and CI-built artifacts are still open, as is lint on top of the existing CI.
+2. Standalone packaging shipped (#118): a PyInstaller spec builds a Windows `.exe` (see Deployment), CI builds and smoke-checks it on every push/PR and uploads it as an artifact; an installer and code signing are still open, as is lint on top of the existing CI.
 3. Data safety: one-click backup of `library.db` shipped (#83) — the `💾 Backup` button snapshots the DB (extracts, flashcards, schedules) into `backups/`, pruning to the newest 10 copies.
 
 ## Self-evaluation

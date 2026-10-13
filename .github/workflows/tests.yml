@@ -31,3 +31,47 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests/ -q
+
+  # Packaging can't be verified by the ubuntu test job (it produces a Windows
+  # .exe). This job builds it on Windows and smoke-checks that the windowed
+  # exe actually starts, so a missing bundled Qt plugin or sqlite DLL fails
+  # the build instead of rotting silently until someone runs it by hand.
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Build standalone exe
+        run: python -m PyInstaller --noconfirm pdf_reader.spec
+
+      - name: Smoke-check the exe starts
+        shell: pwsh
+        run: |
+          $exe = "dist\pdf_reader\pdf_reader.exe"
+          if (-not (Test-Path $exe)) { throw "exe missing after build: $exe" }
+          # Windowed exe: a crash-on-start shows up as an early exit.
+          $proc = Start-Process -FilePath $exe -PassThru `
+            -WorkingDirectory (Split-Path -Parent $exe)
+          Start-Sleep -Seconds 5
+          if ($proc.HasExited) {
+            $code = $proc.ExitCode
+            throw "exe exited early (exit code $code) - missing bundled plugin or DLL"
+          }
+          $proc.CloseMainWindow() | Out-Null
+          if (-not $proc.WaitForExit(3000)) { $proc.Kill() }
+          Write-Host "exe started and stayed alive - packaging OK"
+
+      - name: Upload standalone build
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-reader-windows
+          path: dist/pdf_reader/
+          if-no-files-found: error
