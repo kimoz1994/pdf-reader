@@ -380,6 +380,21 @@ def test_zoom_in_label_shows_percentage(view, app):
     assert "%" in view.zoom_fit_btn.text()
 
 
+def test_zoom_fit_button_text_is_readable_on_light_toolbar(view, app):
+    """(#105 follow-up) The Fit button and page-total label must not use
+    white text: the default Fusion toolbar is light, so white rendered an
+    invisible empty box. Regression guard against that bug."""
+    for widget in (view.zoom_fit_btn, view.page_total_label):
+        style = widget.styleSheet().lower()
+        assert "color:white" not in style, (
+            f"{widget.objectName() or type(widget).__name__} uses "
+            "white text, invisible on the light toolbar"
+        )
+        assert "color: #2c3e50" in style or "color:#2c3e50" in style, (
+            "expected dark readable text"
+        )
+
+
 def test_goto_page_input_jumps_and_clamps(view, app):
     """(#106 AC) Typing a page number + Enter jumps; out-of-range values
     clamp to the document; invalid text restores the current page."""

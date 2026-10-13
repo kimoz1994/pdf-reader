@@ -239,3 +239,104 @@ def test_close_editor_successful_save_closes(app, conn, monkeypatch):
     view._close_editor()
 
     assert not view._editor_open
+
+
+# ------------------------------------------------------------
+# Export (#112, moved here from the Library view per user request)
+# ------------------------------------------------------------
+
+
+def test_export_buttons_live_on_extracts_view(app, conn, monkeypatch):
+    """The 📤 CSV / 📤 MD export buttons sit in the Extracts header."""
+    view = make_view(conn, monkeypatch)
+    assert hasattr(view, "export_csv_btn")
+    assert hasattr(view, "export_md_btn")
+
+
+def test_export_csv_writes_anki_file(app, conn, monkeypatch, tmp_path):
+    """(#112 AC) The CSV button asks where, writes question/answer/
+    source/due rows, and reports the path."""
+    from services.extract_store import create_flashcard
+
+    create_flashcard(conn, "What is X?", "X is a thing")
+    view = make_view(conn, monkeypatch)
+    out = tmp_path / "cards.csv"
+    monkeypatch.setattr(
+        "views.extracts_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "CSV files (*.csv)"),
+    )
+    infos = []
+    monkeypatch.setattr(
+        "views.extracts_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.export_csv_btn.click()
+
+    text = out.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "Question,Answer,Source,Due"
+    assert "What is X?," in text
+    assert infos and str(out) in infos[0][2]
+
+
+def test_export_md_writes_markdown(app, conn, monkeypatch, tmp_path):
+    """(#112 AC) The MD button writes one file with document + extract
+    headings."""
+    seed_extract(conn)
+    view = make_view(conn, monkeypatch)
+    out = tmp_path / "notes.md"
+    monkeypatch.setattr(
+        "views.extracts_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), "Markdown files (*.md)"),
+    )
+    infos = []
+    monkeypatch.setattr(
+        "views.extracts_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+
+    view.export_md_btn.click()
+
+    text = out.read_text(encoding="utf-8")
+    assert "# book.pdf" in text
+    assert "hello" in text
+    assert infos and str(out) in infos[0][2]
+
+
+def test_export_csv_cancel_writes_nothing(app, conn, monkeypatch, tmp_path):
+    """(#112) Cancelling the save dialog leaves the filesystem alone."""
+    from services.extract_store import create_flashcard
+
+    create_flashcard(conn, "Q?", "A")
+    view = make_view(conn, monkeypatch)
+    monkeypatch.setattr(
+        "views.extracts_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: ("", ""),
+    )
+    monkeypatch.setattr(
+        "views.extracts_view.QMessageBox.information", lambda *a: None
+    )
+
+    view.export_csv_btn.click()  # must not raise, must not write
+
+    assert not list(tmp_path.glob("*.csv"))
+
+
+def test_export_csv_empty_library_informs(app, conn, monkeypatch):
+    """(#112) No cards → info dialog, no save prompt."""
+    view = make_view(conn, monkeypatch)
+    infos = []
+    monkeypatch.setattr(
+        "views.extracts_view.QMessageBox.information",
+        lambda *a: infos.append(a),
+    )
+    prompts = []
+    monkeypatch.setattr(
+        "views.extracts_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: prompts.append(1) or ("", ""),
+    )
+
+    view.export_csv_btn.click()
+
+    assert infos and "no flashcards" in infos[0][2].lower()
+    assert prompts == []

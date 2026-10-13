@@ -325,10 +325,12 @@ class PDFReaderView(QWidget):
 
         # Clickable Fit indicator (#105): shows the current zoom mode and
         # restores FitToWidth when clicked (there was no way back after +/-).
+        # Text is dark (not white): the default Fusion toolbar is light
+        # (~#efefef), so white rendered an invisible empty box.
         self.zoom_fit_btn = QPushButton("Zoom: Fit")
         self.zoom_fit_btn.setFixedHeight(35)
         self.zoom_fit_btn.setStyleSheet(
-            "color:white;font-size:14px;background:transparent;"
+            "color:#2c3e50;font-size:14px;background:transparent;"
             "border:1px solid #555;padding:0 8px;"
         )
         self.zoom_fit_btn.clicked.connect(self.zoom_fit)
@@ -361,7 +363,7 @@ class PDFReaderView(QWidget):
 
         self.page_total_label = QLabel("/ -")
         self.page_total_label.setStyleSheet(
-            "color:white;font-size:14px;"
+            "color:#2c3e50;font-size:14px;"
         )
         toolbar.addWidget(self.page_total_label)
 
