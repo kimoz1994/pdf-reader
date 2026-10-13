@@ -939,6 +939,8 @@ class ExtractsView(QWidget):
         self.header_label.hide()
         self.refresh_btn.hide()
         self.delete_btn.hide()
+        self.export_csv_btn.hide()
+        self.export_md_btn.hide()
         self.empty_label.hide()
         self.tree.hide()
         self.editor_page.show()
@@ -1290,6 +1292,8 @@ class ExtractsView(QWidget):
         self.header_label.show()
         self.refresh_btn.show()
         self.delete_btn.show()
+        self.export_csv_btn.show()
+        self.export_md_btn.show()
         if self.tree.topLevelItemCount():
             self.tree.show()
         else:
