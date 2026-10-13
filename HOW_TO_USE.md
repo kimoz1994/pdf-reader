@@ -8,7 +8,7 @@ A friendly, example-driven guide to everything the app can do today. Follow it t
 .\run.ps1
 ```
 
-You'll see three buttons on the left: **📖 Library**, **📝 Extracts**, **🃏 Flashcards** (create, list and review).
+You'll see four buttons on the left: **📖 Library**, **📄 PDF Reader**, **📝 Extracts**, **🃏 Flashcards** (create, list and review).
 
 ---
 
@@ -36,6 +36,8 @@ We'll use the bundled sample `test.pdf` so you don't need your own file (or add 
 2. **🗑️ Remove Selected** shows how many are ticked (e.g. `🗑️ Remove Selected (3)`) and only lights up when at least one is; the stats line under the list shows `— N selected`.
 3. Click it (or press **`Delete`** with the list focused) and confirm: the dialog lists the ticked names behind **Show details** and reminds you the files themselves are untouched.
 4. A file you moved or deleted elsewhere no longer vanishes from the list — it stays marked **⚠ file missing** in orange, so you can tick and remove it like any other row (double-clicking it explains it can't be opened).
+
+![Library with three PDF rows, two of them ticked, and the Remove Selected (2) button counting them](docs/images/library.png)
 
 **Back up your study data**: your Extracts, flashcards and study schedule all live in one file (`library.db`). Click **💾 Backup** in the Library header any time — it saves a consistent copy to the `backups/` folder next to the app, named with the date and time (e.g. `library-20261011-143000.db`), and tells you exactly where it went. Keep a copy somewhere safe (another drive, cloud folder). Old backups are trimmed automatically to the newest 10. **♻️ Restore** (next to Backup) loads one of those snapshots back: pick the snapshot, confirm, and your library is replaced in place — open Extracts or Flashcards to see the restored data. Restore asks before overwriting, so a misclick can't destroy anything.
 
@@ -66,6 +68,12 @@ Search details: nothing runs while you type — press `Enter` to search, `Enter`
 1. **Drag over some text** — it lights up **yellow** (this is a *Highlight*, still pending).
 2. Press **`e`** — it turns **blue**: it's now an *Extract*, saved to disk.
 
+![Reader with a yellow pending highlight on one line and an already-saved blue Extract on the line below](docs/images/reader-yellow.png)
+
+*The drag is yellow (pending), the line below it blue (already saved) — press `e` and the yellow joins it:*
+
+![The same two lines both in blue after pressing e](docs/images/reader-blue.png)
+
 **Capture several bits as one group:**
 
 1. Drag over a sentence … then drag over another one on a different page. Yellow regions **stack** — they all sit in your *Working Set*.
@@ -93,6 +101,10 @@ Search details: nothing runs while you type — press `Enter` to search, `Enter`
 3. **Read and edit an Extract full-page**: select its row and press **Enter** (or double-click). The whole view becomes the **Extract Editor**: the group's text and images as **ONE continuous document** — a single editable surface where the cursor flows across capture boundaries, with images sitting inline between text (type before, after and around them; deleting an image's placeholder removes that image from the document on save — its Capture stays as the blue anchor, so blue redraw and ↱ Jump are unaffected; the label's page span always covers the images still in the document). `Ctrl+Z` undoes across the whole Extract. Click **💾 Save** to persist without leaving, or just press **← Back**: it auto-saves and returns you to the tree with the same row still selected, the preview showing your edited text (or `(empty)` if you emptied it). You can even empty the whole document — the Extract stays in the tree. To resize an inline image, **right-click it** (Bigger `+` / Smaller `-` / Reset to auto size) or put the cursor on it and press **`+`/`-`**: the new size is stored with that image and survives restarts; **Reset** puts it back on the automatic size band. You can also **paste an image straight into the editor** - copy an image (e.g. a screenshot) and press **Ctrl+V**: it drops in at the cursor and is saved with the Extract like any other image (a pasted image has no source page, so ↱ Jump still anchors on the Extract's first real page).
 4. **Delete an Extract**: select it and click **🗑️ Delete Selected** (you'll be asked to confirm; the whole Extract goes). A Document row (or no selection) pops a hint instead. In the reader, the shortcut is **`d` twice**.
 
+![Extracts tree with the Supermemo document expanded to three Extract rows, each with a Jump link](docs/images/extracts-tree.png)
+
+![Extract Editor showing one Extract as a continuous document: a sentence with an inline forgetting-curve figure below it](docs/images/extract-editor.png)
+
 ### 5. Jump back to where it came from
 
 Ever forget where a highlight came from? In the Extracts view, click **↱ Jump** on an Extract row:
@@ -113,6 +125,8 @@ Flashcards quiz you on the passages you captured: a question on the front, your 
 2. Drag over the sentence you want to be quizzed on — that selection becomes the **answer**. (In `test.pdf`, the "SuperMemo is easy if…" bullet on page 28 works well.)
 3. Press **`Ctrl+K`** — or right-click the selection → **🃏 Make flashcard…** — or click **🃏 Make flashcard** in the editor toolbar. All three do the same thing: a dialog opens showing your selection as the answer preview, images inline.
 4. Type the **question** — e.g. `What makes SuperMemo easy to start?` — and press **`Enter`** (or **Add Flashcard**). Done: the answer is copied at that moment, so editing the Extract later never changes the card. `Esc` in the dialog cancels without saving.
+
+![Make flashcard dialog: the answer preview shows the selected text with its inline image, and the question is typed below](docs/images/flashcard-dialog.png)
 
 **Review it:**
 
@@ -184,6 +198,8 @@ Turn any passage you selected into a flashcard:
 4. Type your **question** and press `Enter` (or **Add Flashcard**); `Esc` cancels — nothing is stored.
 
 The answer is copied at that moment — text and image bytes alike — so editing the Extract afterwards never changes the card, and the card still shows its images even if the source document is removed. The dialog's answer preview displays the images inline, not just placeholder boxes. **🃏 Flashcards** in the sidebar lists every card — question, source document, created time, next due time — and a card whose source PDF was removed keeps that document's name (marked `⚠ removed source`, same as the Extracts tree) instead of hiding the source.
+
+![Flashcards list with two cards, blue clickable source links, the Due-today filter and the green Review (2) button](docs/images/flashcards-list.png)
 
 **Fix or remove a card from the list**: select its row and click **✏️ Edit question** (or press `F2`, or right-click the row) to correct a typo — only the question is written, so the card's schedule and next due date do not move; or click **🗑 Delete** (or press `Del`, or right-click) — a confirmation names the card, and confirming removes that card's question, answer, images and review history, **nothing else** (the source Extract stays in your library).
 
